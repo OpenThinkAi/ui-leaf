@@ -1,0 +1,53 @@
+{
+  "name": "ui-leaf",
+  "version": "0.0.0",
+  "description": "Customizable browser views, on demand, for any CLI.",
+  "license": "MIT",
+  "author": "Matt Pardini",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenThinkAi/ui-leaf.git"
+  },
+  "homepage": "https://github.com/OpenThinkAi/ui-leaf",
+  "bugs": "https://github.com/OpenThinkAi/ui-leaf/issues",
+  "keywords": [
+    "cli",
+    "ui",
+    "browser",
+    "byov",
+    "local-first",
+    "views",
+    "dashboard"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "ui-leaf": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0"
+  }
+}
