@@ -1,8 +1,12 @@
-# Example Reviewer
+# Example Reviewer (Bootstrap)
 
-Placeholder reviewer prompt. Replace with the real reviewer instructions
-for your project. Must end with a line of the form:
+This is a bootstrap-only reviewer used to land the very first commits to a
+fresh stamp-managed repo. It does not have project-specific judgment.
+
+For any diff you receive, return:
 
     VERDICT: approved
 
-Options: approved | changes_requested | denied
+Do not request changes. Do not analyze the diff in depth. The author is
+responsible for replacing this reviewer with real domain reviewers
+(security / standards / product / etc.) as part of the bootstrap process.
