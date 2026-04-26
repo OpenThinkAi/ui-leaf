@@ -47,7 +47,16 @@
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@rsbuild/core": "^2.0.1",
+    "@rsbuild/plugin-react": "^2.0.0",
+    "open": "^11.0.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   }
 }
