@@ -50,11 +50,19 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       # GitHub-hosted runners ship an npm version that doesn't fully
-      # support Trusted Publisher OIDC — the publish 404s. Force-install
-      # latest npm before publishing.
+      # support Trusted Publisher OIDC — the publish 404s with a
+      # misleading "package not in registry" error.
       # See: https://github.com/orgs/community/discussions/173102
-      - name: Update npm for OIDC trusted publishing support
-        run: npm install -g npm@latest
+      #
+      # `npm install -g npm@latest` self-corrupts (in-place upgrade
+      # leaves dependencies missing). Use corepack instead, which is
+      # bundled with Node and is designed to swap package-manager
+      # versions cleanly.
+      - name: Pin latest npm via corepack
+        run: |
+          corepack enable
+          corepack prepare npm@latest --activate
+          npm --version
 
       # Authenticates via OIDC. Requires npm-side Trusted Publisher
       # configured at https://www.npmjs.com/package/ui-leaf/access
