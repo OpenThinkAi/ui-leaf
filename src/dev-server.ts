@@ -1,7 +1,9 @@
-// Spike: spin up rsbuild dev server, inject data, open browser.
-// No mutations, no heartbeat, no view-resolution conventions yet.
+// Spike: dev server with mutation bridge + heartbeat-based shutdown.
+// Builds on Spike #1; adds the bridge that makes ui-leaf actually useful.
 
+import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,26 +12,35 @@ import { pluginReact } from "@rsbuild/plugin-react";
 import open from "open";
 
 const here = dirname(fileURLToPath(import.meta.url));
-// dev-server.{ts,js} sits at <pkg>/src or <pkg>/dist. Resolve react from
-// the package's own node_modules so consumers don't need to install React.
-// Trade-off: consumers always get ui-leaf's bundled React version. If a
-// consumer also imports React in their views, both copies could end up in
-// the bundle (duplicate-React risk). Re-evaluate when we add view-resolution
-// from the consumer's own project tree.
+// Resolve react from the package's own node_modules so consumers don't
+// need to install React. Trade-off: consumers who also import React in
+// their views could end up with duplicate copies in the bundle. Re-evaluate
+// when we add view-resolution from the consumer's own project tree.
 const uiLeafPackageRoot = resolve(here, "..");
 const uiLeafNodeModules = resolve(uiLeafPackageRoot, "node_modules");
+
+export type MutationHandler = (args: unknown) => unknown | Promise<unknown>;
 
 export interface DevServerOptions {
   view: string;
   data: unknown;
   viewsRoot: string;
+  mutations?: Record<string, MutationHandler>;
+  /** Browser tab title. Defaults to "ui-leaf". */
+  title?: string;
   port?: number;
   openBrowser?: boolean;
+  /** Heartbeat-stop window in ms. Browser silence longer than this triggers shutdown. */
+  heartbeatTimeoutMs?: number;
+  /** Grace period after server start before the heartbeat watcher is armed. */
+  startupGraceMs?: number;
 }
 
 export interface DevServer {
   url: string;
   port: number;
+  /** Resolves when the view is closed (heartbeat timeout) or close() is called. */
+  closed: Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -42,8 +53,41 @@ function escapeForScriptTag(json: string): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    // 1 MiB cap per request — protects against accidental huge payloads.
+    if (total > 1024 * 1024) {
+      throw new Error("request body exceeds 1 MiB limit");
+    }
+    chunks.push(buf);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : undefined;
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  // Length check is not timing-safe but is fine — the token length is fixed
+  // and known to attackers regardless. The byte compare must be timing-safe.
+  if (a.length !== b.length) return false;
+  return nodeTimingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
-  const { view, data, viewsRoot, port, openBrowser = true } = opts;
+  const {
+    view,
+    data,
+    viewsRoot,
+    mutations = {},
+    title = "ui-leaf",
+    port,
+    openBrowser = true,
+    heartbeatTimeoutMs = 75_000,
+    startupGraceMs = 30_000,
+  } = opts;
 
   const viewAbs = resolve(viewsRoot, `${view}.tsx`);
   try {
@@ -54,6 +98,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     );
   }
 
+  const token = randomBytes(32).toString("hex");
   const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-"));
 
   const entryPath = join(tempDir, "entry.tsx");
@@ -62,13 +107,58 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     `import { createRoot } from "react-dom/client";
 import View from ${JSON.stringify(viewAbs)};
 
+const ctx = (globalThis).__UI_LEAF__ || {};
+const data = ctx.data;
+const token = ctx.token;
+
+async function mutate(name, args) {
+  const res = await fetch("/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+    },
+    body: JSON.stringify({ name, args }),
+  });
+  const text = await res.text().catch(function () { return ""; });
+  if (!res.ok) {
+    var detail = text;
+    try {
+      var parsed = text ? JSON.parse(text) : null;
+      if (parsed && typeof parsed === "object" && typeof parsed.error === "string") {
+        detail = parsed.error;
+      }
+    } catch (_) { /* keep raw text */ }
+    throw new Error("ui-leaf: mutation '" + name + "' failed (" + res.status + "): " + detail);
+  }
+  return text ? JSON.parse(text) : undefined;
+}
+
+async function heartbeat() {
+  try {
+    await fetch("/heartbeat", {
+      method: "POST",
+      headers: token ? { Authorization: "Bearer " + token } : {},
+    });
+  } catch {
+    /* server may have shut down; ignore */
+  }
+}
+setInterval(heartbeat, 5000);
+heartbeat();
+
 const el = document.getElementById("root");
-if (!el) throw new Error("ui-leaf: #root element missing from page");
-const data = (globalThis as { __UI_LEAF__?: { data?: unknown } }).__UI_LEAF__?.data;
-createRoot(el).render(<View data={data} />);
+if (!el) throw new Error("ui-leaf: #root element missing");
+createRoot(el).render(<View data={data} mutate={mutate} />);
 `,
   );
 
+  const dataInline = escapeForScriptTag(JSON.stringify(data));
+  const tokenInline = JSON.stringify(token);
+  const titleEscaped = title
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
   const htmlPath = join(tempDir, "index.html");
   await writeFile(
     htmlPath,
@@ -76,8 +166,8 @@ createRoot(el).render(<View data={data} />);
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>ui-leaf</title>
-    <script>window.__UI_LEAF__ = { data: ${escapeForScriptTag(JSON.stringify(data))} };</script>
+    <title>${titleEscaped}</title>
+    <script>window.__UI_LEAF__ = { data: ${dataInline}, token: ${tokenInline} };</script>
   </head>
   <body>
     <div id="root"></div>
@@ -86,25 +176,94 @@ createRoot(el).render(<View data={data} />);
 `,
   );
 
+  let lastHeartbeatAt = Date.now();
+  let closeRequested = false;
+  let resolveClosed: () => void = () => {};
+  const closed = new Promise<void>((r) => {
+    resolveClosed = r;
+  });
+
+  function checkAuth(req: IncomingMessage): boolean {
+    const header = req.headers.authorization ?? "";
+    const match = /^Bearer (.+)$/.exec(header);
+    if (!match) return false;
+    return timingSafeEqual(match[1]!, token);
+  }
+
+  function sendJson(res: ServerResponse, status: number, body: unknown): void {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(body === undefined ? "" : JSON.stringify(body));
+  }
+
   const rsbuild = await createRsbuild({
     cwd: tempDir,
     rsbuildConfig: {
       plugins: [pluginReact()],
-      source: {
-        entry: { index: entryPath },
+      source: { entry: { index: entryPath } },
+      server: { port: port ?? 3000, host: "127.0.0.1" },
+      // Note: `dev.setupMiddlewares` is deprecated as of rsbuild 2.x in
+      // favor of `server.setup`, but the new API has a different signature
+      // and bypasses the rsbuild CSRF middleware in ways that break our
+      // POST endpoints. Sticking with the deprecated path for v1.
+      dev: {
+        setupMiddlewares: [
+          (middlewares) => {
+            middlewares.unshift(async (req, res, next) => {
+              const url = req.url ?? "";
+              if (req.method === "POST" && url === "/heartbeat") {
+                if (!checkAuth(req)) {
+                  sendJson(res, 401, { error: "unauthorized" });
+                  return;
+                }
+                lastHeartbeatAt = Date.now();
+                sendJson(res, 204, undefined);
+                return;
+              }
+              if (req.method === "POST" && url === "/mutate") {
+                if (!checkAuth(req)) {
+                  sendJson(res, 401, { error: "unauthorized" });
+                  return;
+                }
+                let body: { name?: string; args?: unknown };
+                try {
+                  body = (await readJsonBody(req)) as typeof body;
+                } catch (err) {
+                  sendJson(res, 400, {
+                    error: err instanceof Error ? err.message : "bad request",
+                  });
+                  return;
+                }
+                const name = body?.name;
+                if (typeof name !== "string" || name.length === 0) {
+                  sendJson(res, 400, { error: "missing mutation name" });
+                  return;
+                }
+                if (!Object.hasOwn(mutations, name)) {
+                  sendJson(res, 404, {
+                    error: `ui-leaf: no mutation handler registered for '${name}'. Add it to the mutations: { } map passed to mount().`,
+                  });
+                  return;
+                }
+                const handler = mutations[name]!;
+                try {
+                  const result = await handler(body.args);
+                  sendJson(res, 200, result ?? null);
+                } catch (err) {
+                  sendJson(res, 500, {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
+                return;
+              }
+              next();
+            });
+          },
+        ],
       },
-      server: {
-        port: port ?? 3000,
-        host: "127.0.0.1",
-      },
-      html: {
-        template: htmlPath,
-      },
+      html: { template: htmlPath },
       tools: {
         rspack: {
-          resolve: {
-            modules: [uiLeafNodeModules, "node_modules"],
-          },
+          resolve: { modules: [uiLeafNodeModules, "node_modules"] },
         },
       },
     },
@@ -113,6 +272,26 @@ createRoot(el).render(<View data={data} />);
   const devServer = await rsbuild.startDevServer();
   const actualPort = devServer.port;
   const url = `http://127.0.0.1:${actualPort}`;
+  const startedAt = Date.now();
+
+  let heartbeatWatcher: NodeJS.Timeout | undefined;
+
+  const cleanup = async (): Promise<void> => {
+    if (closeRequested) return;
+    closeRequested = true;
+    if (heartbeatWatcher) clearInterval(heartbeatWatcher);
+    await devServer.server.close();
+    await rm(tempDir, { recursive: true, force: true });
+    resolveClosed();
+  };
+
+  heartbeatWatcher = setInterval(() => {
+    const now = Date.now();
+    if (now - startedAt < startupGraceMs) return;
+    if (now - lastHeartbeatAt > heartbeatTimeoutMs) {
+      void cleanup();
+    }
+  }, 1000);
 
   if (openBrowser) {
     await open(url);
@@ -121,9 +300,7 @@ createRoot(el).render(<View data={data} />);
   return {
     url,
     port: actualPort,
-    close: async () => {
-      await devServer.server.close();
-      await rm(tempDir, { recursive: true, force: true });
-    },
+    closed,
+    close: cleanup,
   };
 }

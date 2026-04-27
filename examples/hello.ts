@@ -1,28 +1,36 @@
-// Spike test: start the dev server with a hardcoded view + data.
+// Spike test: full mount() flow with mutation handlers.
 // Run with: bun run examples/hello.ts
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startDevServer } from "../src/dev-server.ts";
+import { mount } from "../src/index.ts";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const viewsRoot = resolve(here, "../views");
 
-const server = await startDevServer({
+let counter = 0;
+
+console.log("Starting ui-leaf — close the browser tab to exit.");
+
+const view = await mount({
   view: "demo",
   viewsRoot,
   data: {
     message: "Hello from ui-leaf",
     timestamp: new Date().toISOString(),
     items: ["foo", "bar", "baz"],
-    nested: { a: 1, b: 2, c: { deep: true } },
+    initialCount: counter,
+  },
+  mutations: {
+    increment: (args) => {
+      const { by = 1 } = (args as { by?: number } | undefined) ?? {};
+      counter += by;
+      console.log(`[CLI] increment by ${by} → count=${counter}`);
+      return { count: counter };
+    },
   },
 });
 
-console.log(`ui-leaf dev server: ${server.url}`);
-console.log("Press Ctrl+C to stop.");
-
-process.on("SIGINT", async () => {
-  await server.close();
-  process.exit(0);
-});
+console.log(`ui-leaf running at ${view.url} — close the tab to exit.`);
+await view.closed;
+console.log("Browser tab closed; ui-leaf shut down.");
