@@ -49,20 +49,22 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # GitHub-hosted runners ship an npm version that doesn't fully
-      # support Trusted Publisher OIDC — the publish 404s with a
+      # GitHub-hosted runners ship npm 10.x; npm 11.5+ is required for
+      # Trusted Publisher OIDC. Without it, publish 404s with a
       # misleading "package not in registry" error.
       # See: https://github.com/orgs/community/discussions/173102
       #
-      # `npm install -g npm@latest` self-corrupts (in-place upgrade
-      # leaves dependencies missing). Use corepack instead, which is
-      # bundled with Node and is designed to swap package-manager
-      # versions cleanly.
-      - name: Pin latest npm via corepack
+      # In-place `npm install -g npm@latest` self-corrupts. Corepack's
+      # `npm@latest` resolves to a stale 10.x. Install to a fresh
+      # prefix and prepend to PATH instead.
+      - name: Install npm 11 to a fresh prefix
         run: |
-          corepack enable
-          corepack prepare npm@latest --activate
-          npm --version
+          mkdir -p "$HOME/.npm-global"
+          npm install --prefix "$HOME/.npm-global" -g npm@11
+          echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
+
+      - name: Verify npm version
+        run: npm --version
 
       # Authenticates via OIDC. Requires npm-side Trusted Publisher
       # configured at https://www.npmjs.com/package/ui-leaf/access
