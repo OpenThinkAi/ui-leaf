@@ -49,6 +49,13 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # GitHub-hosted runners ship an npm version that doesn't fully
+      # support Trusted Publisher OIDC — the publish 404s. Force-install
+      # latest npm before publishing.
+      # See: https://github.com/orgs/community/discussions/173102
+      - name: Update npm for OIDC trusted publishing support
+        run: npm install -g npm@latest
+
       # Authenticates via OIDC. Requires npm-side Trusted Publisher
       # configured at https://www.npmjs.com/package/ui-leaf/access
       # pointing at this repo + workflow file. No NPM_TOKEN secret needed.
