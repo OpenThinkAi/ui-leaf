@@ -13,15 +13,31 @@ export interface MountOptions {
   data: unknown;
   /**
    * Mutation handlers the view can call via mutate(name, args).
+   * Each handler can self-type its args and return:
+   *
+   *   mutations: {
+   *     recategorize: async (args: { id: string; category: string }) => {
+   *       await db.recategorize(args.id, args.category);
+   *       return { ok: true };
+   *     },
+   *   }
+   *
    * Each request body is capped at 1 MiB; oversized POSTs are rejected
    * with a 400 and the view's mutate() promise rejects with a clear error.
    */
-  mutations?: Record<string, MutationHandler>;
+  // biome-ignore lint/suspicious/noExplicitAny: each handler has its own
+  // arg/return types; the map can't share one shape.
+  mutations?: Record<string, MutationHandler<any, any>>;
   /** Root directory holding view .tsx files. Defaults to <cwd>/views. */
   viewsRoot?: string;
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
-  /** Port to bind. Defaults to 3000. */
+  /**
+   * Port to bind. Defaults to 5810 — unused by the major Node dev tools.
+   * If the port is unavailable, ui-leaf bumps to the next free port and
+   * the actual bound port is reflected on the returned `url` and `port`.
+   * Override only if you need a stable URL (e.g. an external bookmark).
+   */
   port?: number;
   /**
    * Open the browser when ready. Defaults to true. When false, mount()
@@ -29,7 +45,11 @@ export interface MountOptions {
    * headless browser, log the address, etc.
    */
   openBrowser?: boolean;
-  /** Abort to close the dev server early. */
+  /**
+   * Abort to close the dev server early. The returned `closed` promise
+   * resolves either way; if you need to distinguish a signal-driven close
+   * from a natural tab-close, check `signal.aborted` after the await.
+   */
   signal?: AbortSignal;
   /**
    * Browser silence (ms) that triggers shutdown after the startup grace

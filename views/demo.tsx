@@ -1,16 +1,12 @@
 import { useState } from "react";
+import type { ViewProps } from "ui-leaf/view";
 
 interface DemoData {
   initialCount?: number;
   [key: string]: unknown;
 }
 
-interface DemoProps {
-  data: DemoData;
-  mutate: (name: string, args?: unknown) => Promise<unknown>;
-}
-
-export default function Demo({ data, mutate }: DemoProps) {
+export default function Demo({ data, mutate }: ViewProps<DemoData>) {
   // Counter starts from the value the CLI passed in. After mutations,
   // the CLI is the source of truth; the view tracks what it last saw.
   const [count, setCount] = useState(data.initialCount ?? 0);
@@ -21,7 +17,7 @@ export default function Demo({ data, mutate }: DemoProps) {
     setBusy(true);
     setError(null);
     try {
-      const result = (await mutate("increment", { by })) as { count: number };
+      const result = await mutate<{ count: number }>("increment", { by });
       setCount(result.count);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

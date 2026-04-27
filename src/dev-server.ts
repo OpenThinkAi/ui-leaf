@@ -20,13 +20,17 @@ const uiLeafRequire = createRequire(import.meta.url);
 const reactPath = dirname(uiLeafRequire.resolve("react/package.json"));
 const reactDomPath = dirname(uiLeafRequire.resolve("react-dom/package.json"));
 
-export type MutationHandler = (args: unknown) => unknown | Promise<unknown>;
+export type MutationHandler<TArgs = unknown, TResult = unknown> = (
+  args: TArgs,
+) => TResult | Promise<TResult>;
 
 export interface DevServerOptions {
   view: string;
   data: unknown;
   viewsRoot: string;
-  mutations?: Record<string, MutationHandler>;
+  // biome-ignore lint/suspicious/noExplicitAny: each handler has its own
+  // arg/return types; the map can't share one shape.
+  mutations?: Record<string, MutationHandler<any, any>>;
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
   port?: number;
@@ -201,7 +205,10 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     rsbuildConfig: {
       plugins: [pluginReact()],
       source: { entry: { index: entryPath } },
-      server: { port: port ?? 3000, host: "127.0.0.1" },
+      // 5810 is unused by the major Node dev tools (vite=5173, parcel=1234,
+      // webpack=8080, next/CRA=3000). rsbuild auto-bumps to the next free
+      // port if 5810 is busy, so collisions are graceful.
+      server: { port: port ?? 5810, host: "127.0.0.1" },
       // Note: `dev.setupMiddlewares` is deprecated as of rsbuild 2.x in
       // favor of `server.setup`, but the new API has a different signature
       // and bypasses the rsbuild CSRF middleware in ways that break our

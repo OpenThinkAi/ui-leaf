@@ -44,20 +44,32 @@ for guidance on calibrating reviewer prompts.
 
 ## Verdict criteria
 
-- **approved** — nothing in this reviewer's scope to flag.
-- **changes_requested** — specific fixable issues. Name the file:line, the
-  problem, and the fix. Example: "hardcoded token at `src/api.ts:12`;
-  move to an env var read at boot."
+- **approved** — no exploitable issues, no secret exposure, no
+  trust-boundary widening. Low-severity hardening notes ("could close
+  this surface entirely with `Object.hasOwn`") are *recommendations*,
+  not blockers. Approve and list them as recommendations.
+- **changes_requested** — there is a real exploitable issue, secret
+  leak, or trust-model break. Name the file:line, the attack, and the
+  fix. Example: "hardcoded token at `src/api.ts:12`; move to an env
+  var read at boot."
 - **denied** — the diff introduces a fundamentally unsafe architecture:
   opens a dynamic-code-execution path, trusts untrusted input in a
   privileged context, removes a load-bearing check. Use `denied` when
   line-level edits cannot fix the problem.
 
-## Tone
+## Severity guidance
 
-Direct. Terse. If nothing's wrong, say so briefly and approve — don't
-invent concerns to fill space. When something IS wrong, be specific
-about the attack and the fix.
+Reserve `changes_requested` for actual security issues. Hardening
+opportunities, defense-in-depth ideas, or "this is fine but X would be
+even safer" observations belong as bullet points under an `approved`
+verdict. The author should be able to merge without coming back to
+this reviewer for the polish.
+
+## Tone & length
+
+Lead with the verdict and the 1-3 most important findings. Optional
+hardening notes go in a smaller footer. Aim for a review the author
+can act on in 60 seconds. Don't restate what the diff already says.
 
 ## Output format (required — do not change)
 
