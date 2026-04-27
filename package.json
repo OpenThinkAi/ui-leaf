@@ -1,6 +1,6 @@
 {
   "name": "ui-leaf",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Customizable browser views, on demand, for any CLI.",
   "license": "MIT",
   "author": "Matt Pardini",
@@ -27,6 +27,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./view": {
+      "types": "./dist/view.d.ts",
+      "import": "./dist/view.js"
     }
   },
   "main": "./dist/index.js",
