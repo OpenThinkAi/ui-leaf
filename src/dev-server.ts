@@ -4,20 +4,21 @@
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createRsbuild } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
 import open from "open";
 
-const here = dirname(fileURLToPath(import.meta.url));
-// Resolve react from the package's own node_modules so consumers don't
-// need to install React. Trade-off: consumers who also import React in
-// their views could end up with duplicate copies in the bundle. Re-evaluate
-// when we add view-resolution from the consumer's own project tree.
-const uiLeafPackageRoot = resolve(here, "..");
-const uiLeafNodeModules = resolve(uiLeafPackageRoot, "node_modules");
+// Resolve react / react-dom from ui-leaf's installed location using
+// Node's actual resolver. With hoisting (npm/pnpm/bun), these end up in
+// the consumer's top-level node_modules, NOT under ui-leaf/node_modules.
+// Aliasing the resolved directory paths in rspack lets the bundled view
+// always find react no matter where the package manager put it.
+const uiLeafRequire = createRequire(import.meta.url);
+const reactPath = dirname(uiLeafRequire.resolve("react/package.json"));
+const reactDomPath = dirname(uiLeafRequire.resolve("react-dom/package.json"));
 
 export type MutationHandler = (args: unknown) => unknown | Promise<unknown>;
 
@@ -263,7 +264,12 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
       html: { template: htmlPath },
       tools: {
         rspack: {
-          resolve: { modules: [uiLeafNodeModules, "node_modules"] },
+          resolve: {
+            alias: {
+              react: reactPath,
+              "react-dom": reactDomPath,
+            },
+          },
         },
       },
     },
