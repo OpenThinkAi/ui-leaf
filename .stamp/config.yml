@@ -5,8 +5,6 @@ branches:
       - standards
       - product
 reviewers:
-  example:
-    prompt: .stamp/reviewers/example.md
   security:
     prompt: .stamp/reviewers/security.md
   standards:
