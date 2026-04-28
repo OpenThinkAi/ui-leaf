@@ -67,7 +67,8 @@ if (args[0] !== "mount") {
 
 // `ui-leaf mount --help` (or being run on a TTY without piped input)
 // would otherwise sit silently on stdin. Print the protocol pointer and
-// exit so users discovering the binary aren't stranded.
+// exit 0 so users discovering the binary land on docs, not a "broken"
+// exit code.
 if (args[1] === "--help" || args[1] === "-h" || process.stdin.isTTY) {
   process.stdout.write(
     [
@@ -86,7 +87,7 @@ if (args[1] === "--help" || args[1] === "-h" || process.stdin.isTTY) {
       "",
     ].join("\n"),
   );
-  process.exit(args[1] === "--help" || args[1] === "-h" ? 0 : 1);
+  process.exit(0);
 }
 
 try {
