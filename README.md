@@ -94,6 +94,7 @@ await mount({
   title,                                     // optional, default: "ui-leaf"
   port,                                      // optional, default: 5810 (auto-bumps if busy)
   openBrowser,                               // optional, default: true
+  csp,                                       // optional, default: "off" (see Hardening)
   signal,                                    // optional AbortSignal
   heartbeatTimeoutMs,                        // optional, default: 75000
   startupGraceMs,                            // optional, default: 30000
@@ -103,6 +104,34 @@ await mount({
 (This is a summary — see the JSDoc on `MountOptions` for the full TypeScript shape and per-field rationale.)
 
 Returns `{ url, port, closed, close }`.
+
+## Hardening: locking the data/mutation contract with CSP
+
+By default, the data/mutation routing is **convention, not enforcement** — a view file is JavaScript in a browser tab and can `fetch()` anywhere it likes. Most consumers don't need more than that.
+
+When you do want to enforce it (typically: views handle data sensitive enough that you don't want a forked view to be able to exfiltrate it), opt in via `csp`:
+
+```ts
+mount({
+  view: "report",
+  data: { ... },
+  csp: "strict",   // or a custom CSP string for full control
+});
+```
+
+`csp: "strict"` ships a balanced preset that:
+
+- **Locks `connect-src` to same-origin** — the architectural lock. Views cannot fetch external APIs; all data flows through `data` and `mutations`.
+- **Permits HTTPS images and fonts** so views can load CDN assets normally.
+- **Allows inline styles, eval, and inline scripts** for React + rsbuild's HMR.
+
+Because the policy is sent as an HTTP response header, views cannot relax it at runtime. The only way to weaken the policy is to change the `mount()` call (i.e. fork the consumer CLI, not the view).
+
+If the preset is too strict for your case (e.g. you need to allow Sentry telemetry), pass a raw CSP string:
+
+```ts
+csp: "default-src 'self'; connect-src 'self' https://sentry.io; img-src 'self' https:;"
+```
 
 ## Status
 

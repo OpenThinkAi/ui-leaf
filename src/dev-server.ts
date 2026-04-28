@@ -24,6 +24,33 @@ export type MutationHandler<TArgs = unknown, TResult = unknown> = (
   args: TArgs,
 ) => TResult | Promise<TResult>;
 
+// `(string & {})` preserves the "off" / "strict" autocomplete suggestions
+// while still allowing arbitrary CSP strings. Plain string would collapse
+// the union and lose IntelliSense for the literals.
+export type CspOption = "off" | "strict" | (string & {});
+
+/**
+ * Strict preset: locks `connect-src` to same-origin (the architectural
+ * lock that forces views to route mutations through the CLI), while
+ * permitting common needs (HTTPS images/fonts, inline styles for React,
+ * eval/inline-scripts for rsbuild's HMR client). A future "production"
+ * mode could ship a tighter preset once HMR isn't in the picture.
+ */
+const STRICT_CSP = [
+  "default-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data: https:",
+  "font-src 'self' https: data:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+].join("; ");
+
+function resolveCsp(opt: CspOption | undefined): string | null {
+  if (!opt || opt === "off") return null;
+  if (opt === "strict") return STRICT_CSP;
+  return opt;
+}
+
 export interface DevServerOptions {
   view: string;
   data: unknown;
@@ -39,6 +66,8 @@ export interface DevServerOptions {
   heartbeatTimeoutMs?: number;
   /** Grace period after server start before the heartbeat watcher is armed. */
   startupGraceMs?: number;
+  /** Content-Security-Policy enforcement. See MountOptions.csp. */
+  csp?: CspOption;
 }
 
 export interface DevServer {
@@ -92,7 +121,9 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     openBrowser = true,
     heartbeatTimeoutMs = 75_000,
     startupGraceMs = 30_000,
+    csp,
   } = opts;
+  const cspHeader = resolveCsp(csp);
 
   const viewAbs = resolve(viewsRoot, `${view}.tsx`);
   try {
@@ -265,6 +296,16 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
               }
               next();
             });
+            // CSP middleware unshifts AFTER the route handler so it ends up
+            // at index 0 — runs first on every request, sets the header,
+            // then yields to the route or rsbuild static handlers. No-op
+            // when csp resolves to null (the "off" default).
+            if (cspHeader) {
+              middlewares.unshift((_req, res, next) => {
+                res.setHeader("Content-Security-Policy", cspHeader);
+                next();
+              });
+            }
           },
         ],
       },
