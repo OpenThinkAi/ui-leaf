@@ -133,6 +133,52 @@ If the preset is too strict for your case (e.g. you need to allow Sentry telemet
 csp: "default-src 'self'; connect-src 'self' https://sentry.io; img-src 'self' https:;"
 ```
 
+## Sharing views across users
+
+ui-leaf views run on `127.0.0.1`, so the URL in the address bar isn't shareable — a coworker can't paste `http://127.0.0.1:5810/...` into Slack and have it open on their machine. Browsers also can't be made to *display* a custom protocol like `mycli://...` for an HTTP-served page (browser security: any HTTP page could spoof itself otherwise).
+
+The pattern that works: **the consumer CLI generates a deep-link URL and passes it through `data`. The view renders a "copy share link" button that puts that deep-link URL on the clipboard.**
+
+```ts
+// in the consumer CLI:
+await mount({
+  view: "spec",
+  data: {
+    spec: specContent,
+    shareUrl: `mycli://spec/${specId}`,
+  },
+  mutations: { /* … */ },
+});
+```
+
+```tsx
+// in the consumer's views/spec.tsx:
+import type { ViewProps } from "ui-leaf/view";
+
+export default function Spec({ data }: ViewProps<{ spec: string; shareUrl: string }>) {
+  return (
+    <>
+      {/* render the spec */}
+      <button onClick={() => navigator.clipboard.writeText(data.shareUrl)}>
+        Copy share link
+      </button>
+    </>
+  );
+}
+```
+
+User A clicks the button → `mycli://spec/abc123` is on their clipboard. User B clicks the link → their browser hands off to the OS → OS launches `mycli` (because it's registered as the `mycli://` handler) → the consumer parses the URL, fetches the spec on their machine, calls `mount(...)` again on User B's side. Two independent ui-leaf invocations, same view, same data, no localhost URL ever leaves either machine.
+
+What the consumer CLI is responsible for (out of ui-leaf's scope):
+
+- **Registering the URL scheme with the OS** at install time. Per-OS:
+  - macOS: `.app` bundle with `CFBundleURLTypes` in `Info.plist`
+  - Windows: registry entries under `HKEY_CLASSES_ROOT\<scheme>`
+  - Linux: `.desktop` file with `MimeType=x-scheme-handler/<scheme>;`
+- **Parsing the URL on launch** — when the OS invokes `mycli mycli://spec/abc123`, parse it, look up `abc123`, build the data, call `mount`.
+- **Generating share URLs that are stable IDs**, not raw payloads — URLs land in browser history, screenshots, and copy-paste; treat them accordingly.
+- **Handling "not installed" UX** in the originating web app (if the link gets shared with someone who doesn't have `mycli`) — typical pattern is to set `window.location` to the deep-link URL, then after a short timeout fall back to "looks like you don't have mycli installed, here's how to get it."
+
 ## Status
 
 `0.1.x` — pre-1.0, expect churn. The public API shape is settling but not frozen.
