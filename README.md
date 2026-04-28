@@ -94,6 +94,7 @@ await mount({
   title,                                     // optional, default: "ui-leaf"
   port,                                      // optional, default: 5810 (auto-bumps if busy)
   openBrowser,                               // optional, default: true
+  shell,                                     // optional, "tab" | "app", default: "tab"
   csp,                                       // optional, default: "off" (see Hardening)
   signal,                                    // optional AbortSignal
   heartbeatTimeoutMs,                        // optional, default: 75000
@@ -166,6 +167,8 @@ export default function Spec({ data }: ViewProps<{ spec: string; shareUrl: strin
   );
 }
 ```
+
+Pair with `shell: "app"` (Chromium's chromeless window mode) to hide the localhost URL bar entirely on Chrome/Edge/Brave — the share button becomes the *only* way to copy a link from the view. (Safari and Firefox fall back to a regular tab.)
 
 User A clicks the button → `mycli://spec/abc123` is on their clipboard. User B clicks the link → their browser hands off to the OS → OS launches `mycli` (because it's registered as the `mycli://` handler) → the consumer parses the URL, fetches the spec on their machine, calls `mount(...)` again on User B's side. Two independent ui-leaf invocations, same view, same data, no localhost URL ever leaves either machine.
 
