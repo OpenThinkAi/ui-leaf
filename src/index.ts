@@ -2,9 +2,13 @@
 // https://github.com/OpenThinkAi/ui-leaf
 
 import { resolve } from "node:path";
-import { startDevServer, type MutationHandler } from "./dev-server.js";
+import {
+  startDevServer,
+  type CspOption,
+  type MutationHandler,
+} from "./dev-server.js";
 
-export type { MutationHandler };
+export type { CspOption, MutationHandler };
 
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
@@ -61,6 +65,29 @@ export interface MountOptions {
    */
   heartbeatTimeoutMs?: number;
   /**
+   * Content-Security-Policy enforcement. Defaults to "off".
+   *
+   * - `"off"` — no CSP header sent. Views can fetch arbitrary URLs and
+   *   embed external resources freely. The data/mutations convention is
+   *   honor-system.
+   *
+   * - `"strict"` — ui-leaf sends a balanced preset: locks `connect-src`
+   *   to same-origin (the architectural lock — views cannot fetch
+   *   external APIs, so all data flows through `data` and `mutations`),
+   *   while permitting common needs (HTTPS images / fonts, inline
+   *   styles for React, eval for rsbuild HMR). View files can only
+   *   *add* further restrictions via meta tag, never remove them.
+   *
+   * - `string` — raw CSP header value for full control. Use when the
+   *   "strict" preset doesn't fit (e.g. you need `connect-src` to
+   *   include a Sentry endpoint).
+   *
+   * Trade-off: when set to "strict" or a custom string, a view file
+   * cannot relax the policy at runtime. Switching back requires changing
+   * the mount() call. That rigidity is a feature.
+   */
+  csp?: CspOption;
+  /**
    * Grace period (ms) after server start before the heartbeat watcher arms.
    * Cold-loading clients sometimes take a few seconds to send their first
    * heartbeat. Defaults to 30000.
@@ -115,6 +142,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     openBrowser: opts.openBrowser,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
+    csp: opts.csp,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {
