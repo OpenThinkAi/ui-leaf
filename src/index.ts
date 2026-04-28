@@ -6,9 +6,10 @@ import {
   startDevServer,
   type CspOption,
   type MutationHandler,
+  type Shell,
 } from "./dev-server.js";
 
-export type { CspOption, MutationHandler };
+export type { CspOption, MutationHandler, Shell };
 
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
@@ -49,6 +50,22 @@ export interface MountOptions {
    * headless browser, log the address, etc.
    */
   openBrowser?: boolean;
+  /**
+   * Browser shell. Defaults to "tab".
+   *
+   * - `"tab"` — open in the user's default browser as a regular tab.
+   *   Works everywhere; URL bar is visible.
+   *
+   * - `"app"` — try Chromium's `--app` mode for a chromeless window
+   *   (no URL bar, no tabs, looks like a desktop app). Available on
+   *   Chrome, Edge, and Brave. If no Chromium browser is installed,
+   *   ui-leaf falls back to "tab" with a stderr note. Safari and
+   *   Firefox always fall back.
+   *
+   * Pair with the share-link pattern (see "Sharing views across users"
+   * in the README) when you want users to never see a localhost URL.
+   */
+  shell?: Shell;
   /**
    * Abort to close the dev server early. The returned `closed` promise
    * resolves either way; if you need to distinguish a signal-driven close
@@ -96,9 +113,6 @@ export interface MountOptions {
    * the server shuts down on its own.
    */
   startupGraceMs?: number;
-  // Note: a `shell: "tab" | "app"` option (Chrome --app chromeless window)
-  // was deferred from this release; v1 supports only the default
-  // browser-tab shell.
 }
 
 export interface MountedView {
@@ -140,6 +154,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     title: opts.title,
     port: opts.port,
     openBrowser: opts.openBrowser,
+    shell: opts.shell,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
     csp: opts.csp,

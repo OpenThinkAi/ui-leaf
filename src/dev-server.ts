@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRsbuild } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
-import open from "open";
+import open, { apps } from "open";
 
 // Resolve react / react-dom from ui-leaf's installed location using
 // Node's actual resolver. With hoisting (npm/pnpm/bun), these end up in
@@ -28,6 +28,28 @@ export type MutationHandler<TArgs = unknown, TResult = unknown> = (
 // while still allowing arbitrary CSP strings. Plain string would collapse
 // the union and lose IntelliSense for the literals.
 export type CspOption = "off" | "strict" | (string & {});
+
+export type Shell = "tab" | "app";
+
+/**
+ * Try to open `url` in a Chromium browser's --app mode (chromeless window:
+ * no URL bar, no tabs). Returns true if a Chromium browser was found and
+ * launched, false if no Chromium variant is installed (caller should fall
+ * back to the default-browser tab).
+ */
+async function openInAppMode(url: string): Promise<boolean> {
+  // Order: most-common Chromium variants first.
+  const candidates = [apps.chrome, apps.edge, apps.brave];
+  for (const app of candidates) {
+    try {
+      await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
+      return true;
+    } catch {
+      // Try next candidate; `open` throws if the binary isn't installed.
+    }
+  }
+  return false;
+}
 
 /**
  * Strict preset: locks `connect-src` to same-origin (the architectural
@@ -62,6 +84,15 @@ export interface DevServerOptions {
   title?: string;
   port?: number;
   openBrowser?: boolean;
+  /**
+   * Browser shell. Defaults to "tab".
+   *
+   * - "tab" — open in user's default browser as a regular tab.
+   * - "app" — try Chromium's --app mode (chromeless window). Falls back
+   *   to "tab" if no Chromium browser is installed (Chrome/Edge/Brave),
+   *   with a stderr note. Safari and Firefox always fall back.
+   */
+  shell?: Shell;
   /** Heartbeat-stop window in ms. Browser silence longer than this triggers shutdown. */
   heartbeatTimeoutMs?: number;
   /** Grace period after server start before the heartbeat watcher is armed. */
@@ -119,6 +150,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     title = "ui-leaf",
     port,
     openBrowser = true,
+    shell = "tab",
     heartbeatTimeoutMs = 75_000,
     startupGraceMs = 30_000,
     csp,
@@ -348,7 +380,17 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   }, 1000);
 
   if (openBrowser) {
-    await open(url);
+    if (shell === "app") {
+      const launched = await openInAppMode(url);
+      if (!launched) {
+        process.stderr.write(
+          `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
+        );
+        await open(url);
+      }
+    } else {
+      await open(url);
+    }
   }
 
   return {
