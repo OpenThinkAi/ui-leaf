@@ -96,6 +96,7 @@ await mount({
   openBrowser,                               // optional, default: true
   shell,                                     // optional, "tab" | "app", default: "tab"
   csp,                                       // optional, default: "off" (see Hardening)
+  silent,                                    // optional, default: false (see Programmatic use)
   signal,                                    // optional AbortSignal
   heartbeatTimeoutMs,                        // optional, default: 75000
   startupGraceMs,                            // optional, default: 30000
@@ -181,6 +182,43 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
 - **Parsing the URL on launch** — when the OS invokes `mycli mycli://spec/abc123`, parse it, look up `abc123`, build the data, call `mount`.
 - **Generating share URLs that are stable IDs**, not raw payloads — URLs land in browser history, screenshots, and copy-paste; treat them accordingly.
 - **Handling "not installed" UX** in the originating web app (if the link gets shared with someone who doesn't have `mycli`) — typical pattern is to set `window.location` to the deep-link URL, then after a short timeout fall back to "looks like you don't have mycli installed, here's how to get it."
+
+## Programmatic use (driving ui-leaf from a subprocess)
+
+If you're calling `mount()` from a Node bridge that another process is spawning — e.g. a Rust / Go / Python / shell-script CLI shelling out to a small `bridge.js` you maintain — you'll want to keep stdout clean for your own protocol.
+
+By default, ui-leaf and rsbuild write banner / build / deprecation lines to stdout. That collides with line-delimited JSON or any other structured channel a parent process is reading. Pass `silent: true`:
+
+```ts
+import { mount } from "ui-leaf";
+
+// Capture the *real* stdout reference BEFORE mount() redirects it.
+const realStdoutWrite = process.stdout.write.bind(process.stdout);
+
+const view = await mount({
+  view: "spec",
+  viewsRoot: "/abs/path/to/views",
+  data: { /* ... */ },
+  openBrowser: false,                  // parent decides when to open
+  silent: true,                        // suppress rsbuild noise on stdout
+  port: 0,                             // let OS pick a free port
+});
+
+// Now write your own protocol on the real stdout.
+realStdoutWrite(JSON.stringify({ type: "ready", url: view.url, port: view.port }) + "\n");
+
+await view.closed;
+realStdoutWrite(JSON.stringify({ type: "closed" }) + "\n");
+```
+
+Other tips for programmatic consumers:
+
+- **Pass `viewsRoot` explicitly.** The default is `<cwd>/views`, which is wrong for a bridge invoked from a different working directory.
+- **Pass `port: 0`.** Lets the OS pick a free port and report it back via `view.port`. The default `5810` is for human-direct use; concurrent invocations would otherwise conflict.
+- **Lower `heartbeatTimeoutMs`** (e.g. to 5000) when the bridge is the supervisor. The default 75-second window survives browser-tab throttling for human use, but is too long when the parent process dies and you want orphaned ui-leaf children to exit fast.
+- **Kill the child explicitly on parent shutdown** rather than relying on heartbeat timeout — `process.kill(child.pid)` from your spawning code.
+
+A working reference bridge for Rust consumers lives at [`OpenThinkAi/open-audit/bridges/ui-leaf`](https://github.com/OpenThinkAi/open-audit/tree/main/bridges/ui-leaf). A first-class language-neutral binary (`ui-leaf mount …`) that internalizes this pattern is on the roadmap (Spike #4).
 
 ## Status
 

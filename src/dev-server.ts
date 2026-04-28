@@ -20,6 +20,35 @@ const uiLeafRequire = createRequire(import.meta.url);
 const reactPath = dirname(uiLeafRequire.resolve("react/package.json"));
 const reactDomPath = dirname(uiLeafRequire.resolve("react-dom/package.json"));
 
+// Module-level stdout redirect state. Captured ONCE at module load so
+// concurrent silent: true mounts share the same "original" reference and
+// restore-order doesn't matter. Refcounted so the last close restores.
+const ORIGINAL_STDOUT_WRITE = process.stdout.write.bind(process.stdout);
+let stdoutRedirectCount = 0;
+
+/**
+ * Redirect process.stdout.write to process.stderr until the returned
+ * function is called. Safe under concurrent silent mounts.
+ */
+function redirectStdoutToStderr(): () => void {
+  stdoutRedirectCount++;
+  if (stdoutRedirectCount === 1) {
+    // biome-ignore lint/suspicious/noExplicitAny: stdout.write has overloaded
+    // signatures; forward exactly what comes in.
+    process.stdout.write = ((chunk: any, enc?: any, cb?: any) =>
+      process.stderr.write(chunk, enc, cb)) as typeof process.stdout.write;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    stdoutRedirectCount--;
+    if (stdoutRedirectCount === 0) {
+      process.stdout.write = ORIGINAL_STDOUT_WRITE;
+    }
+  };
+}
+
 export type MutationHandler<TArgs = unknown, TResult = unknown> = (
   args: TArgs,
 ) => TResult | Promise<TResult>;
@@ -99,6 +128,18 @@ export interface DevServerOptions {
   startupGraceMs?: number;
   /** Content-Security-Policy enforcement. See MountOptions.csp. */
   csp?: CspOption;
+  /**
+   * Suppress ui-leaf / rsbuild output to stdout. When true:
+   * - rsbuildConfig.logLevel is set to 'silent' (no banner, build, or
+   *   deprecation messages)
+   * - process.stdout.write is redirected to process.stderr for the
+   *   lifetime of the dev server, restored on close()
+   *
+   * Use when driving mount() programmatically and stdout is reserved for
+   * a structured protocol (e.g. line-delimited JSON to a parent process).
+   * Default: false.
+   */
+  silent?: boolean;
 }
 
 export interface DevServer {
@@ -154,9 +195,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     heartbeatTimeoutMs = 75_000,
     startupGraceMs = 30_000,
     csp,
+    silent = false,
   } = opts;
   const cspHeader = resolveCsp(csp);
 
+  // Programmatic consumers (esp. non-Node CLIs spawning ui-leaf as a
+  // subprocess) often reserve stdout for a structured protocol. Belt-and-
+  // -suspenders: rsbuild's logLevel:'silent' catches its own logger output,
+  // and process.stdout.write is redirected to stderr to catch anything
+  // that bypasses rsbuild's logger (banner before logger init, third-party
+  // module writes, etc.).
+  const restoreStdout: (() => void) | null = silent ? redirectStdoutToStderr() : null;
+
+  try {
   const viewAbs = resolve(viewsRoot, `${view}.tsx`);
   try {
     await stat(viewAbs);
@@ -267,6 +318,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     cwd: tempDir,
     rsbuildConfig: {
       plugins: [pluginReact()],
+      ...(silent ? { logLevel: "silent" as const } : {}),
       source: { entry: { index: entryPath } },
       // 5810 is unused by the major Node dev tools (vite=5173, parcel=1234,
       // webpack=8080, next/CRA=3000). rsbuild auto-bumps to the next free
@@ -368,6 +420,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     if (heartbeatWatcher) clearInterval(heartbeatWatcher);
     await devServer.server.close();
     await rm(tempDir, { recursive: true, force: true });
+    if (restoreStdout) restoreStdout();
     resolveClosed();
   };
 
@@ -399,4 +452,11 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     closed,
     close: cleanup,
   };
+  } catch (err) {
+    // If setup fails before the dev server's close() is wired up, the
+    // caller never gets a close to call. Restore stdout on the throw
+    // path; the success path restores via cleanup() on close().
+    restoreStdout?.();
+    throw err;
+  }
 }
