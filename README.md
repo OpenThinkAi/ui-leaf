@@ -206,7 +206,7 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
   - `{"type":"error","message":"…"}` — emitted on internal failure
 - **Lifecycle:** binary exits 0 on natural close, 1 on internal error; closing stdin from the parent triggers shutdown.
 
-### Minimal Bash example
+### Minimal Bash example (read-only view, no mutations)
 
 ```bash
 CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
@@ -215,6 +215,33 @@ echo "$CONFIG" | ui-leaf mount
 # (browser opens; user closes tab)
 # → {"type":"closed"}
 ```
+
+### Worked example with mutations
+
+When the view calls `mutate("name", args)`, the binary emits a `mutate` event on stdout and waits for the parent to write back a `result` (or `error`) on stdin, paired by `id`. The runnable script in [`examples/bash/counter.sh`](./examples/bash/counter.sh) demonstrates the full cycle. Sketch:
+
+```
+Parent → child stdin:
+  {"view":"demo","viewsRoot":"/abs/path","data":{"initialCount":0},"mutations":["increment"]}
+
+Child → parent stdout:
+  {"type":"ready","url":"http://127.0.0.1:54321","port":54321}
+
+(user clicks "+1" in the view)
+
+Child → parent stdout:
+  {"type":"mutate","id":1,"name":"increment","args":{"by":1}}
+
+Parent → child stdin (after handling the mutation):
+  {"type":"result","id":1,"value":{"count":1}}
+
+(user closes tab)
+
+Child → parent stdout:
+  {"type":"closed"}
+```
+
+Each pending mutation has a unique `id`. Multiple mutations can be in flight concurrently — match `result`/`error` responses by id.
 
 ### Tips for non-Node consumers
 
@@ -243,7 +270,7 @@ realStdoutWrite(JSON.stringify({ type: "ready", url: view.url, port: view.port }
 
 ## Status
 
-`0.1.x` — pre-1.0, expect churn. The public API shape is settling but not frozen.
+`0.2.x` — pre-1.0, expect churn. The Node SDK and the `ui-leaf mount` binary are settling but not frozen.
 
 ## License
 
