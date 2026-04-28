@@ -105,6 +105,28 @@ export interface MountOptions {
    */
   csp?: CspOption;
   /**
+   * Suppress ui-leaf / rsbuild output to stdout. Default: false.
+   *
+   * When you drive `mount()` programmatically — e.g. as part of a Node
+   * bridge for a non-Node CLI that's spawned ui-leaf as a subprocess —
+   * stdout is usually reserved for a structured protocol (line-delimited
+   * JSON, etc.). Without this option, rsbuild's banner and build messages
+   * collide with that protocol and silently corrupt it on the consumer
+   * side.
+   *
+   * Setting `silent: true`:
+   * - Sets rsbuild's logLevel to 'silent' (no banner, build, or
+   *   deprecation messages emitted by rsbuild)
+   * - Redirects `process.stdout.write` to `process.stderr` for the
+   *   lifetime of the dev server, restored on close
+   *
+   * Tradeoff: any other code in the same process that writes to stdout
+   * during the dev server's lifetime is also redirected. Hold the
+   * captured `process.stdout.write` reference yourself if you need to
+   * write to the *real* stdout from the same process.
+   */
+  silent?: boolean;
+  /**
    * Grace period (ms) after server start before the heartbeat watcher arms.
    * Cold-loading clients sometimes take a few seconds to send their first
    * heartbeat. Defaults to 30000.
@@ -158,6 +180,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
     csp: opts.csp,
+    silent: opts.silent,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {
