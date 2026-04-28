@@ -5,6 +5,7 @@ import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
+import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRsbuild } from "@rsbuild/core";
@@ -25,6 +26,30 @@ const reactDomPath = dirname(uiLeafRequire.resolve("react-dom/package.json"));
 // restore-order doesn't matter. Refcounted so the last close restores.
 const ORIGINAL_STDOUT_WRITE = process.stdout.write.bind(process.stdout);
 let stdoutRedirectCount = 0;
+
+/**
+ * Ask the OS for a free port and return it. Used when the consumer
+ * requests `port: 0`. There's a small race window between close() and
+ * rsbuild's bind, but in practice it's never been an issue for dev
+ * tooling.
+ */
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createTcpServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (!addr || typeof addr !== "object") {
+        server.close();
+        reject(new Error("ui-leaf: failed to obtain a free port from the OS"));
+        return;
+      }
+      const port = addr.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
 
 /**
  * Redirect process.stdout.write to process.stderr until the returned
@@ -199,6 +224,12 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   } = opts;
   const cspHeader = resolveCsp(csp);
 
+  // Resolve port: 0 means "let the OS pick" — but rsbuild doesn't honor
+  // port: 0 (it literally binds to 0 and reports back 0). Pre-allocate a
+  // free port via Node's net layer and pass that explicit port to rsbuild
+  // instead. Default 5810 if no port specified.
+  const resolvedPort = port === 0 ? await findFreePort() : (port ?? 5810);
+
   // Programmatic consumers (esp. non-Node CLIs spawning ui-leaf as a
   // subprocess) often reserve stdout for a structured protocol. Belt-and-
   // -suspenders: rsbuild's logLevel:'silent' catches its own logger output,
@@ -323,7 +354,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
       // 5810 is unused by the major Node dev tools (vite=5173, parcel=1234,
       // webpack=8080, next/CRA=3000). rsbuild auto-bumps to the next free
       // port if 5810 is busy, so collisions are graceful.
-      server: { port: port ?? 5810, host: "127.0.0.1" },
+      server: { port: resolvedPort, host: "127.0.0.1" },
       // Note: `dev.setupMiddlewares` is deprecated as of rsbuild 2.x in
       // favor of `server.setup`, but the new API has a different signature
       // and bypasses the rsbuild CSRF middleware in ways that break our

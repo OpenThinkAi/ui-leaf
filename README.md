@@ -183,42 +183,63 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
 - **Generating share URLs that are stable IDs**, not raw payloads — URLs land in browser history, screenshots, and copy-paste; treat them accordingly.
 - **Handling "not installed" UX** in the originating web app (if the link gets shared with someone who doesn't have `mycli`) — typical pattern is to set `window.location` to the deep-link URL, then after a short timeout fall back to "looks like you don't have mycli installed, here's how to get it."
 
-## Programmatic use (driving ui-leaf from a subprocess)
+## Driving ui-leaf from a non-Node CLI (Rust / Go / Python / shell)
 
-If you're calling `mount()` from a Node bridge that another process is spawning — e.g. a Rust / Go / Python / shell-script CLI shelling out to a small `bridge.js` you maintain — you'll want to keep stdout clean for your own protocol.
+`ui-leaf mount` is a language-neutral binary. Any CLI that can spawn a subprocess and read/write JSON lines on stdio can drive ui-leaf with no Node code of its own — install ui-leaf via `npm i -g ui-leaf` (or bundle it), and shell out to `ui-leaf mount`.
 
-By default, ui-leaf and rsbuild write banner / build / deprecation lines to stdout. That collides with line-delimited JSON or any other structured channel a parent process is reading. Pass `silent: true`:
+### Protocol
+
+- **stdin (line-delimited JSON):**
+  - **Line 1** — config:
+    ```json
+    {"view":"spec","viewsRoot":"/abs/path","data":{},"mutations":["refresh","dismiss"],"port":0,"openBrowser":true,"heartbeatTimeoutMs":5000}
+    ```
+  - **Subsequent lines** — mutation responses (paired by `id`):
+    ```json
+    {"type":"result","id":1,"value":{"ok":true}}
+    {"type":"error","id":2,"message":"…"}
+    ```
+- **stdout (line-delimited JSON):**
+  - `{"type":"ready","url":"http://127.0.0.1:54321","port":54321}` — emitted once when the dev server is up
+  - `{"type":"mutate","id":1,"name":"refresh","args":{}}` — emitted when a view triggers a mutation; respond on stdin
+  - `{"type":"closed"}` — emitted on natural close (browser tab closed, heartbeat timeout)
+  - `{"type":"error","message":"…"}` — emitted on internal failure
+- **Lifecycle:** binary exits 0 on natural close, 1 on internal error; closing stdin from the parent triggers shutdown.
+
+### Minimal Bash example
+
+```bash
+CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
+echo "$CONFIG" | ui-leaf mount
+# → {"type":"ready","url":"http://127.0.0.1:54321","port":54321}
+# (browser opens; user closes tab)
+# → {"type":"closed"}
+```
+
+### Tips for non-Node consumers
+
+- **Pass `viewsRoot` as an absolute path.** No `cwd/views` default games when invoked from another process.
+- **Pass `port: 0`.** ui-leaf asks the OS for a free port and reports it back in the `ready` event. Lets you run concurrent views without collision.
+- **Lower `heartbeatTimeoutMs`** (e.g. 5000) so orphaned ui-leaf children exit fast if your parent process dies. The default 75000 is tuned for human-direct use (survives one browser background-tab throttle) and is too long when a parent process is supervising.
+- **Kill the child on parent shutdown** rather than relying on heartbeat — `kill <pid>` from the parent. Closing stdin also triggers a clean shutdown.
+- **Declare every mutation name** the view will call in the `mutations: []` array. The binary only routes mutations whose names appear in the list; calls to undeclared names get a 404 from `/mutate` with the standard "no mutation handler registered for X" error, and the view's `mutate()` promise rejects.
+
+### Driving from Node via `mount()` directly
+
+If your consumer is itself Node (or you want a thin in-process integration), use the SDK directly. Pass `silent: true` to suppress rsbuild output so you can keep stdout clean for your own protocol (capture `process.stdout.write` *before* calling `mount()`, since the option redirects stdout to stderr for the lifetime of the dev server):
 
 ```ts
-import { mount } from "ui-leaf";
-
-// Capture the *real* stdout reference BEFORE mount() redirects it.
 const realStdoutWrite = process.stdout.write.bind(process.stdout);
-
 const view = await mount({
   view: "spec",
   viewsRoot: "/abs/path/to/views",
   data: { /* ... */ },
-  openBrowser: false,                  // parent decides when to open
-  silent: true,                        // suppress rsbuild noise on stdout
-  port: 0,                             // let OS pick a free port
+  openBrowser: false,
+  silent: true,
+  port: 0,
 });
-
-// Now write your own protocol on the real stdout.
 realStdoutWrite(JSON.stringify({ type: "ready", url: view.url, port: view.port }) + "\n");
-
-await view.closed;
-realStdoutWrite(JSON.stringify({ type: "closed" }) + "\n");
 ```
-
-Other tips for programmatic consumers:
-
-- **Pass `viewsRoot` explicitly.** The default is `<cwd>/views`, which is wrong for a bridge invoked from a different working directory.
-- **Pass `port: 0`.** Lets the OS pick a free port and report it back via `view.port`. The default `5810` is for human-direct use; concurrent invocations would otherwise conflict.
-- **Lower `heartbeatTimeoutMs`** (e.g. to 5000) when the bridge is the supervisor. The default 75-second window survives browser-tab throttling for human use, but is too long when the parent process dies and you want orphaned ui-leaf children to exit fast.
-- **Kill the child explicitly on parent shutdown** rather than relying on heartbeat timeout — `process.kill(child.pid)` from your spawning code.
-
-A working reference bridge for Rust consumers lives at [`OpenThinkAi/open-audit/bridges/ui-leaf`](https://github.com/OpenThinkAi/open-audit/tree/main/bridges/ui-leaf). A first-class language-neutral binary (`ui-leaf mount …`) that internalizes this pattern is on the roadmap (Spike #4).
 
 ## Status
 
