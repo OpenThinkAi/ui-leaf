@@ -78,7 +78,7 @@ Three reasons:
 
 `mount()` spins up a local dev server (rsbuild + React under the hood), bundles your view file, injects the data into `window.__UI_LEAF__.data`, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered. Browser tab close → heartbeat stops → server shuts down → `view.closed` resolves and your CLI continues.
 
-The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`. Other processes on the same machine can't make valid mutation calls without it. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
+The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, and it's served inline in the HTML at `/index.html` — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch the page, grep the token out, and call `/mutate` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
 
 ## API surface
 
