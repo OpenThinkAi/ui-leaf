@@ -2,7 +2,8 @@
 // Builds on Spike #1; adds the bridge that makes ui-leaf actually useful.
 
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
@@ -49,6 +50,44 @@ async function findFreePort(): Promise<number> {
       server.close(() => resolve(port));
     });
   });
+}
+
+// Stale-tempdir sweep threshold. Each mount writes index.html with the
+// consumer's data inlined; a crashed run leaves the dir behind until OS
+// rotation. 24h is well past any realistic single-session lifetime and
+// well short of the macOS reboot-only rotation cadence.
+const STALE_TEMPDIR_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Best-effort removal of `ui-leaf-*` siblings in `tmpdir()` whose mtime
+ * is older than the stale threshold. Fire-and-forget; never throws.
+ * Filters by mtime so concurrent ui-leaf processes' active dirs are left
+ * alone (they're created fresh per mount).
+ */
+async function sweepStaleTempDirs(): Promise<void> {
+  try {
+    const root = tmpdir();
+    const entries = await readdir(root, { withFileTypes: true });
+    const cutoff = Date.now() - STALE_TEMPDIR_AGE_MS;
+    await Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && e.name.startsWith("ui-leaf-"))
+        .map(async (e) => {
+          const path = join(root, e.name);
+          try {
+            const info = await stat(path);
+            if (info.mtimeMs < cutoff) {
+              await rm(path, { recursive: true, force: true });
+            }
+          } catch {
+            // Another process may be mid-cleanup, or the dir may belong
+            // to a different UID; either way, skip silently.
+          }
+        }),
+    );
+  } catch {
+    // tmpdir() unreadable is rare and not actionable here.
+  }
 }
 
 /**
@@ -296,6 +335,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   // module writes, etc.).
   const restoreStdout: (() => void) | null = silent ? redirectStdoutToStderr() : null;
 
+  // Hoisted so the outer catch can sweep them on a setup-time throw.
+  let tempDir: string | null = null;
+  let cleanupOnExit: (() => void) | null = null;
+
   try {
   if (view.includes("/") || view.includes("\\")) {
     throw new Error(
@@ -318,9 +361,29 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   }
 
   const token = randomBytes(32).toString("hex");
-  const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-"));
+  tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-"));
 
-  const entryPath = join(tempDir, "entry.tsx");
+  // Synchronous fallback for any exit path that bypasses cleanup() —
+  // uncaught throws and programmatic process.exit. SIGKILL, OOM-kill,
+  // and power loss skip every Node hook, so the next startup's sweep is
+  // the backstop for those. rmSync with force is idempotent when the
+  // dir is already gone, so this no-ops safely if cleanup() ran first.
+  const dirToSweep = tempDir;
+  cleanupOnExit = (): void => {
+    try {
+      rmSync(dirToSweep, { recursive: true, force: true });
+    } catch {
+      // Exit handlers must not throw.
+    }
+  };
+  process.on("exit", cleanupOnExit);
+
+  // Mop up any abandoned ui-leaf-* dirs from prior crashed runs that
+  // SIGKILL'd or otherwise skipped both cleanup() and the exit handler.
+  // Fire-and-forget so the sweep never blocks startup.
+  void sweepStaleTempDirs();
+
+  const entryPath = join(dirToSweep, "entry.tsx");
   await writeFile(
     entryPath,
     `import { createRoot } from "react-dom/client";
@@ -378,7 +441,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  const htmlPath = join(tempDir, "index.html");
+  const htmlPath = join(dirToSweep, "index.html");
   await writeFile(
     htmlPath,
     `<!DOCTYPE html>
@@ -415,7 +478,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   }
 
   const rsbuild = await createRsbuild({
-    cwd: tempDir,
+    cwd: dirToSweep,
     rsbuildConfig: {
       plugins: [pluginReact()],
       ...(silent ? { logLevel: "silent" as const } : {}),
@@ -537,7 +600,10 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     closeRequested = true;
     if (heartbeatWatcher) clearInterval(heartbeatWatcher);
     await devServer.server.close();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(dirToSweep, { recursive: true, force: true });
+    // Listener is per-mount — unhook so long-lived hosts that mount many
+    // views in sequence don't pile up exit handlers.
+    if (cleanupOnExit) process.off("exit", cleanupOnExit);
     if (restoreStdout) restoreStdout();
     resolveClosed();
   };
@@ -571,9 +637,18 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     close: cleanup,
   };
   } catch (err) {
-    // If setup fails before the dev server's close() is wired up, the
-    // caller never gets a close to call. Restore stdout on the throw
-    // path; the success path restores via cleanup() on close().
+    // Setup failed before close() got wired up, so the caller has no
+    // close to call. The user's catch may keep the process alive doing
+    // other work, so sweep the (possibly populated) tempDir now and
+    // unhook the exit fallback rather than waiting on process exit.
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort; the next startup's sweep will catch it.
+      }
+    }
+    if (cleanupOnExit) process.off("exit", cleanupOnExit);
     restoreStdout?.();
     throw err;
   }
