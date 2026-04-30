@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { createRsbuild } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
 import open, { apps } from "open";
@@ -239,7 +239,18 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   const restoreStdout: (() => void) | null = silent ? redirectStdoutToStderr() : null;
 
   try {
-  const viewAbs = resolve(viewsRoot, `${view}.tsx`);
+  if (view.includes("/") || view.includes("\\")) {
+    throw new Error(
+      `ui-leaf: view '${view}' must be a bare identifier with no path separators`,
+    );
+  }
+  const viewsRootAbs = resolve(viewsRoot);
+  const viewAbs = resolve(viewsRootAbs, `${view}.tsx`);
+  if (!viewAbs.startsWith(viewsRootAbs + sep)) {
+    throw new Error(
+      `ui-leaf: view '${view}' resolves outside viewsRoot`,
+    );
+  }
   try {
     await stat(viewAbs);
   } catch {
