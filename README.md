@@ -151,6 +151,12 @@ mount({
 
 Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or LAN hostnames you don't fully control.
 
+### Data-at-rest in the temp directory
+
+ui-leaf serialises the `data` you pass to `mount()` into `<tmpdir()>/ui-leaf-XXXXXX/index.html` so the dev server can serve it. The directory is created with `mode 0700` (readable only by the same UID), and ui-leaf removes it on `close()`, on `SIGINT`/`SIGTERM`, on uncaught throws via a `process.on('exit')` fallback, and opportunistically sweeps `ui-leaf-*` siblings older than 24h on every startup to catch anything that still slipped through.
+
+What still leaks: `SIGKILL`, OOM-kill, and abrupt power loss skip every Node hook, so the directory stays on disk until the next `mount()` runs (the startup sweep) or the OS rotates `tmpdir()` (on macOS, only across reboots; on many Linux systems, only via `tmpfiles.d` age policies). If the data is sensitive enough that even that bounded window is too long, keep it in memory in your CLI and inject it into the view via an authenticated `connect-src 'self'` fetch on boot rather than passing it through `data`.
+
 ## Sharing views across users
 
 ui-leaf views run on `127.0.0.1`, so the URL in the address bar isn't shareable — a coworker can't paste `http://127.0.0.1:5810/...` into Slack and have it open on their machine. Browsers also can't be made to *display* a custom protocol like `mycli://...` for an HTTP-served page (browser security: any HTTP page could spoof itself otherwise).
