@@ -7,6 +7,8 @@ npm install ui-leaf
 # or: bun add ui-leaf / pnpm add ui-leaf / yarn add ui-leaf
 ```
 
+Type declarations (`dist/*.d.ts`) are emitted by TypeScript 6.x; consuming projects on TypeScript 5.x should generally work but are not exercised in CI.
+
 ## What it is
 
 `ui-leaf` lets any CLI mount a local browser view from a single function call. The CLI pipes structured data in; the view renders it; user-driven mutations (button clicks, edits, deletes) flow **back through the CLI** as plain function calls — never directly to whatever backing API the CLI uses.

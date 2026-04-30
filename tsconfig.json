@@ -17,7 +17,10 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    // tsup 8.5.1's DTS pipeline injects `baseUrl`, which TS 6.0 deprecates and TS 7.0 will remove.
+    // The project's own tsc --noEmit passes without this flag — drop it once tsup stops injecting baseUrl.
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
