@@ -207,6 +207,42 @@ function timingSafeEqual(a: string, b: string): boolean {
   return nodeTimingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+
+// Extract the hostname portion of a Host header value, stripping the port.
+// IPv6 hosts arrive bracketed (`[::1]:5810`); plain hosts as `host:port`
+// or bare `host`. Returns lowercased hostname or null on shapes we don't
+// recognise (caller treats null as "reject").
+function parseHostHeader(value: string): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    const close = trimmed.indexOf("]");
+    if (close === -1) return null;
+    return trimmed.slice(1, close).toLowerCase();
+  }
+  const colon = trimmed.indexOf(":");
+  return (colon === -1 ? trimmed : trimmed.slice(0, colon)).toLowerCase();
+}
+
+// DNS-rebinding defence: every request must arrive with a Host header
+// pointing at a loopback name. Same gate applies to Origin when the
+// browser sends one. Absent Origin is fine — many legitimate same-origin
+// requests omit it.
+function isLoopbackHost(value: string | undefined): boolean {
+  const host = value === undefined ? null : parseHostHeader(value);
+  return host !== null && LOOPBACK_HOSTNAMES.has(host);
+}
+
+function isLoopbackOrigin(value: string | undefined): boolean {
+  if (value === undefined || value === "" || value === "null") return true;
+  try {
+    return LOOPBACK_HOSTNAMES.has(new URL(value).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
   const {
     view,
@@ -374,6 +410,19 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
         setupMiddlewares: [
           (middlewares) => {
             middlewares.unshift(async (req, res, next) => {
+              // DNS-rebinding gate: reject anything not arriving with a
+              // loopback Host (and Origin, when present) before any auth
+              // or routing runs. Done in ui-leaf's own middleware rather
+              // than relying on rsbuild so the property is explicit and
+              // survives upstream API churn.
+              if (
+                !isLoopbackHost(req.headers.host) ||
+                !isLoopbackOrigin(req.headers.origin)
+              ) {
+                res.statusCode = 403;
+                res.end("forbidden host");
+                return;
+              }
               const url = req.url ?? "";
               if (req.method === "POST" && url === "/heartbeat") {
                 if (!checkAuth(req)) {
