@@ -43,3 +43,22 @@ gate makes that idempotent.
 The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` +
 `publish.yml`; renaming the workflow file requires reconfiguring the
 binding at <https://www.npmjs.com/package/ui-leaf/access>.
+
+## Dependency updates
+
+Bot-opened PRs from Dependabot, Renovate, Snyk, and similar GitHub-side
+bots cannot be merged through the GitHub UI — that would diverge the
+GitHub mirror from Railway `main` and break the stamp invariant. The
+`.github/workflows/bot-pr-to-issue.yml` workflow intercepts those PRs,
+creates a mirroring issue (prefixed `deps:`, labeled `dependencies` and
+`from-bot`), and closes the original PR with a redirect comment.
+
+When picking up one of these issues, apply the change on a
+stamp-gated feature branch off `main` exactly like any other fix:
+branch, edit the manifest, refresh the lockfile (`bun install`),
+commit, `stamp review`, `stamp merge`, `stamp push`. The mirror
+fast-forwards GitHub afterward and the publish workflow handles
+release if the change is paired with a version bump.
+
+The bot allowlist lives in the `if:` clause of `bot-pr-to-issue.yml`;
+extend it when adopting a new bot integration.

@@ -1,0 +1,81 @@
+name: Bot PR to Issue
+
+# Stamp-governed repos cannot accept GitHub-side bot PRs (Dependabot,
+# Renovate, Snyk, ...) merged through the GitHub UI: the GitHub mirror
+# is downstream of Railway, so a UI merge would diverge the mirror from
+# the bare repo and break the next stamp push. This workflow intercepts
+# bot-opened PRs, files an issue mirroring the PR's metadata, and closes
+# the original PR with a permanent redirect comment. The agentic-desktop
+# "Assign to agent" flow then picks the issue up and applies the change
+# as a stamp-gated feature branch off Railway.
+#
+# `pull_request_target` (not `pull_request`) is required: Dependabot
+# runs from a separate bot account that GitHub treats as a fork, so a
+# `pull_request` workflow would run in restricted mode without secrets
+# and fail to create issues or close PRs. `pull_request_target` runs in
+# the base repo's trusted context, which is what the API calls need.
+# We deliberately do NOT check out the PR head — the only operations
+# performed are GitHub API calls via the gh CLI.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  convert:
+    if: contains(fromJSON('["dependabot[bot]","renovate[bot]","snyk-bot"]'), github.actor)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create dependencies \
+            --color "0366d6" \
+            --description "Pull requests that update a dependency file" \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh label create from-bot \
+            --color "ededed" \
+            --description "Auto-generated from a GitHub-side bot PR" \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
+      - name: Create issue mirroring PR
+        id: create_issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BOT_LOGIN: ${{ github.actor }}
+        run: |
+          {
+            printf 'Auto-generated from %s PR #%s (closed in favor of stamp-gated flow).\n\n' "$BOT_LOGIN" "$PR_NUMBER"
+            printf '%s\n\n' "$PR_TITLE"
+            printf 'Original PR: %s\n\n' "$PR_URL"
+            printf -- '---\n\n'
+            printf '%s\n' "$PR_BODY"
+          } > "$RUNNER_TEMP/issue-body.md"
+
+          ISSUE_URL=$(gh issue create \
+            --title "deps: $PR_TITLE" \
+            --body-file "$RUNNER_TEMP/issue-body.md" \
+            --label "dependencies,from-bot" \
+            --repo "$GITHUB_REPOSITORY")
+
+          echo "Created issue: $ISSUE_URL"
+          echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Close original PR with redirect comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_URL: ${{ steps.create_issue.outputs.issue_url }}
+        run: |
+          gh pr close "$PR_NUMBER" \
+            --comment "Auto-closing — this repo is stamp-gated; the dep update is tracked at $ISSUE_URL and will be applied via the stamp flow." \
+            --repo "$GITHUB_REPOSITORY"
