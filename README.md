@@ -149,7 +149,7 @@ mount({
 });
 ```
 
-Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or wildcards.
+Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or LAN hostnames you don't fully control.
 
 ## Sharing views across users
 

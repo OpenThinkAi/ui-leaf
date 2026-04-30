@@ -248,7 +248,14 @@ function isAllowedHost(value: string | undefined, allowed: Set<string>): boolean
 function isAllowedOrigin(value: string | undefined, allowed: Set<string>): boolean {
   if (value === undefined || value === "" || value === "null") return true;
   try {
-    return allowed.has(new URL(value).hostname.toLowerCase());
+    // WHATWG URL keeps the brackets on IPv6 hostnames (`[::1]`), but the
+    // allow-list stores them stripped (matching parseHostHeader's output)
+    // so origins and hosts compare consistently.
+    let hostname = new URL(value).hostname.toLowerCase();
+    if (hostname.startsWith("[") && hostname.endsWith("]")) {
+      hostname = hostname.slice(1, -1);
+    }
+    return allowed.has(hostname);
   } catch {
     return false;
   }
