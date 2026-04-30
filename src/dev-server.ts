@@ -364,11 +364,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-"));
 
   // Synchronous fallback for any exit path that bypasses cleanup() —
-  // uncaught throws, programmatic process.exit, OOM-kill while the loop
-  // is still ticking, etc. SIGKILL and power-loss still leak (no Node
-  // hook can run); the periodic startup sweep below mops those up.
-  // rmSync with force is idempotent when the dir is already gone, so
-  // this no-ops safely if cleanup() ran first.
+  // uncaught throws and programmatic process.exit. SIGKILL, OOM-kill,
+  // and power loss skip every Node hook, so the next startup's sweep is
+  // the backstop for those. rmSync with force is idempotent when the
+  // dir is already gone, so this no-ops safely if cleanup() ran first.
   const dirToSweep = tempDir;
   cleanupOnExit = (): void => {
     try {
@@ -646,7 +645,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
       try {
         rmSync(tempDir, { recursive: true, force: true });
       } catch {
-        // Best-effort; the exit handler is the backstop if still installed.
+        // Best-effort; the next startup's sweep will catch it.
       }
     }
     if (cleanupOnExit) process.off("exit", cleanupOnExit);
