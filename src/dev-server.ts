@@ -154,6 +154,15 @@ export interface DevServerOptions {
   /** Content-Security-Policy enforcement. See MountOptions.csp. */
   csp?: CspOption;
   /**
+   * Extra hostnames (beyond `localhost`, `127.0.0.1`, `[::1]`) accepted in
+   * the request `Host` and `Origin` headers. Use to allow a custom
+   * `/etc/hosts` alias or another loopback name; values are matched by
+   * hostname only (port-agnostic). Anything outside this set + the
+   * loopback defaults is rejected with HTTP 403 to defend against
+   * DNS-rebinding attacks. Default: empty.
+   */
+  allowedHosts?: string[];
+  /**
    * Suppress ui-leaf / rsbuild output to stdout. When true:
    * - rsbuildConfig.logLevel is set to 'silent' (no banner, build, or
    *   deprecation messages)
@@ -207,15 +216,15 @@ function timingSafeEqual(a: string, b: string): boolean {
   return nodeTimingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
 }
 
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+const DEFAULT_LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "::1"] as const;
 
 // Extract the hostname portion of a Host header value, stripping the port.
 // IPv6 hosts arrive bracketed (`[::1]:5810`); plain hosts as `host:port`
 // or bare `host`. Returns lowercased hostname or null on shapes we don't
 // recognise (caller treats null as "reject").
 function parseHostHeader(value: string): string | null {
-  if (!value) return null;
   const trimmed = value.trim();
+  if (trimmed === "") return null;
   if (trimmed.startsWith("[")) {
     const close = trimmed.indexOf("]");
     if (close === -1) return null;
@@ -226,18 +235,20 @@ function parseHostHeader(value: string): string | null {
 }
 
 // DNS-rebinding defence: every request must arrive with a Host header
-// pointing at a loopback name. Same gate applies to Origin when the
-// browser sends one. Absent Origin is fine — many legitimate same-origin
-// requests omit it.
-function isLoopbackHost(value: string | undefined): boolean {
+// pointing at one of the allowed names. Same gate applies to Origin when
+// the browser sends one. Absent Origin is fine — many legitimate
+// same-origin requests omit it. `Origin: null` is allowed because
+// sandboxed iframes and `file://` pages send it; the Host check still
+// constrains the network path so the Origin allowance isn't load-bearing.
+function isAllowedHost(value: string | undefined, allowed: Set<string>): boolean {
   const host = value === undefined ? null : parseHostHeader(value);
-  return host !== null && LOOPBACK_HOSTNAMES.has(host);
+  return host !== null && allowed.has(host);
 }
 
-function isLoopbackOrigin(value: string | undefined): boolean {
+function isAllowedOrigin(value: string | undefined, allowed: Set<string>): boolean {
   if (value === undefined || value === "" || value === "null") return true;
   try {
-    return LOOPBACK_HOSTNAMES.has(new URL(value).hostname.toLowerCase());
+    return allowed.has(new URL(value).hostname.toLowerCase());
   } catch {
     return false;
   }
@@ -256,9 +267,13 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     heartbeatTimeoutMs = 75_000,
     startupGraceMs = 30_000,
     csp,
+    allowedHosts,
     silent = false,
   } = opts;
   const cspHeader = resolveCsp(csp);
+  const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
+  for (const h of allowedHosts ?? []) allowedHostSet.add(h.toLowerCase());
+  const allowedHostList = [...allowedHostSet].join(", ");
 
   // Resolve port: 0 means "let the OS pick" — but rsbuild doesn't honor
   // port: 0 (it literally binds to 0 and reports back 0). Pre-allocate a
@@ -410,17 +425,22 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
         setupMiddlewares: [
           (middlewares) => {
             middlewares.unshift(async (req, res, next) => {
-              // DNS-rebinding gate: reject anything not arriving with a
-              // loopback Host (and Origin, when present) before any auth
+              // DNS-rebinding gate: reject anything not arriving with an
+              // allowed Host (and Origin, when present) before any auth
               // or routing runs. Done in ui-leaf's own middleware rather
               // than relying on rsbuild so the property is explicit and
               // survives upstream API churn.
-              if (
-                !isLoopbackHost(req.headers.host) ||
-                !isLoopbackOrigin(req.headers.origin)
-              ) {
+              const hostOk = isAllowedHost(req.headers.host, allowedHostSet);
+              const originOk = isAllowedOrigin(req.headers.origin, allowedHostSet);
+              if (!hostOk || !originOk) {
+                const offender = !hostOk
+                  ? `Host "${req.headers.host ?? "(absent)"}"`
+                  : `Origin "${req.headers.origin}"`;
                 res.statusCode = 403;
-                res.end("forbidden host");
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                res.end(
+                  `ui-leaf: refusing request with ${offender} — only the following hostnames are accepted to prevent DNS rebinding: ${allowedHostList}. Open the dev server at http://localhost:${resolvedPort}/ or http://127.0.0.1:${resolvedPort}/, or pass { allowedHosts: ["my-alias"] } to mount() to permit a custom alias.\n`,
+                );
                 return;
               }
               const url = req.url ?? "";

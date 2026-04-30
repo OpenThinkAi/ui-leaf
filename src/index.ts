@@ -105,6 +105,21 @@ export interface MountOptions {
    */
   csp?: CspOption;
   /**
+   * Extra hostnames accepted in the request `Host` and `Origin` headers
+   * on top of the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`).
+   *
+   * The dev server gates every request on this set to defend against
+   * DNS-rebinding attacks; non-matching requests get HTTP 403. Use this
+   * escape hatch when you need to reach the dev server through a custom
+   * `/etc/hosts` alias (e.g. `["my-app.local"]`) or any other loopback
+   * name. Hostnames are matched case-insensitively, port-agnostic.
+   *
+   * Be deliberate: any hostname you add becomes a viable DNS-rebinding
+   * target. Don't add wildcards, public DNS names, or LAN hostnames you
+   * don't fully control.
+   */
+  allowedHosts?: string[];
+  /**
    * Suppress ui-leaf / rsbuild output to stdout. Default: false.
    *
    * When you drive `mount()` programmatically — e.g. as part of a Node
@@ -180,6 +195,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
     csp: opts.csp,
+    allowedHosts: opts.allowedHosts,
     silent: opts.silent,
   });
 

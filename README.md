@@ -135,6 +135,22 @@ If the preset is too strict for your case (e.g. you need to allow Sentry telemet
 csp: "default-src 'self'; connect-src 'self' https://sentry.io; img-src 'self' https:;"
 ```
 
+### DNS-rebinding defence
+
+The dev server only accepts requests whose `Host` (and `Origin`, when sent) header points at a loopback name — `localhost`, `127.0.0.1`, or `[::1]`. Anything else gets a 403. This blocks DNS-rebinding attacks where a malicious page swings its A-record to `127.0.0.1` and tries to talk to your dev server with the per-launch auth token it can read out of `/index.html`.
+
+If you reach the dev server through a custom `/etc/hosts` alias (e.g. `my-app.local → 127.0.0.1`), pass it through `allowedHosts`:
+
+```ts
+mount({
+  view: "report",
+  data: { ... },
+  allowedHosts: ["my-app.local"],
+});
+```
+
+Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or wildcards.
+
 ## Sharing views across users
 
 ui-leaf views run on `127.0.0.1`, so the URL in the address bar isn't shareable — a coworker can't paste `http://127.0.0.1:5810/...` into Slack and have it open on their machine. Browsers also can't be made to *display* a custom protocol like `mycli://...` for an HTTP-served page (browser security: any HTTP page could spoof itself otherwise).
