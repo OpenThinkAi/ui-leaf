@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ui-leaf",
+      "name": "@openthink/ui-leaf",
       "dependencies": {
         "@rsbuild/core": "^2.0.1",
         "@rsbuild/plugin-react": "^2.0.0",

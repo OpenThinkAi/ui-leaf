@@ -13,7 +13,7 @@ post-receive hook (`.stamp/mirror.yml`). All merges to `main` go through
 
 Releases are gated by **`package.json.version`**, not git tags. The
 `.github/workflows/publish.yml` workflow runs on every push to `main`, but
-its `publish` job only fires when `npm view ui-leaf@<version>` reports
+its `publish` job only fires when `npm view @openthink/ui-leaf@<version>` reports
 that version is not yet on the registry. Non-bump merges no-op safely.
 
 To cut a release:
@@ -31,7 +31,7 @@ To cut a release:
    open the gate.
 6. `stamp merge release/vX.Y.Z --into main`, then `stamp push main`.
 7. The mirror to GitHub fires automatically; the Publish workflow runs
-   on the new `main` HEAD, and on success publishes `ui-leaf@X.Y.Z` to
+   on the new `main` HEAD, and on success publishes `@openthink/ui-leaf@X.Y.Z` to
    npm via OIDC Trusted Publishing with `--provenance`.
 
 There is no separate `git tag` step — tags aren't part of the trigger
@@ -42,7 +42,7 @@ gate makes that idempotent.
 
 The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` +
 `publish.yml`; renaming the workflow file requires reconfiguring the
-binding at <https://www.npmjs.com/package/ui-leaf/access>.
+binding at <https://www.npmjs.com/package/@openthink/ui-leaf/access>.
 
 ## Dependency updates
 

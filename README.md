@@ -3,8 +3,8 @@
 Customizable browser views, on demand, for any CLI.
 
 ```bash
-npm install ui-leaf
-# or: bun add ui-leaf / pnpm add ui-leaf / yarn add ui-leaf
+npm install @openthink/ui-leaf
+# or: bun add @openthink/ui-leaf / pnpm add @openthink/ui-leaf / yarn add @openthink/ui-leaf
 ```
 
 Type declarations (`dist/*.d.ts`) are emitted by TypeScript 6.x; consuming projects on TypeScript 5.x should generally work but are not exercised in CI.
@@ -19,7 +19,7 @@ The view is your code, in your project's `views/` folder. Customize it, regenera
 
 ```ts
 // my-cli/src/commands/spend.ts
-import { mount } from "ui-leaf";
+import { mount } from "@openthink/ui-leaf";
 
 const view = await mount({
   view: "spend",
@@ -85,7 +85,7 @@ The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.
 ## API surface
 
 ```ts
-import { mount } from "ui-leaf";
+import { mount } from "@openthink/ui-leaf";
 import type { ViewProps, MutationHandler } from "ui-leaf/view";
 
 await mount({
@@ -209,7 +209,7 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
 
 ## Driving ui-leaf from a non-Node CLI (Rust / Go / Python / shell)
 
-`ui-leaf mount` is a language-neutral binary. Any CLI that can spawn a subprocess and read/write JSON lines on stdio can drive ui-leaf with no Node code of its own — install ui-leaf via `npm i -g ui-leaf` (or bundle it), and shell out to `ui-leaf mount`.
+`ui-leaf mount` is a language-neutral binary. Any CLI that can spawn a subprocess and read/write JSON lines on stdio can drive ui-leaf with no Node code of its own — install ui-leaf via `npm i -g @openthink/ui-leaf` (or bundle it), and shell out to `ui-leaf mount`.
 
 ### Protocol
 
