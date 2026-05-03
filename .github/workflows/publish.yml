@@ -50,12 +50,12 @@ jobs:
       - name: Check if already on npm
         id: check_npm
         run: |
-          if npm view "ui-leaf@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@openthink/ui-leaf@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "ui-leaf@${{ steps.version.outputs.version }} already on npm — skipping release."
+            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} already on npm — skipping release."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
+            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
           fi
 
   publish:

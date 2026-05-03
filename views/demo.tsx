@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ViewProps } from "ui-leaf/view";
+import type { ViewProps } from "@openthink/ui-leaf/view";
 
 interface DemoData {
   initialCount?: number;

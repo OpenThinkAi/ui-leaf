@@ -38,7 +38,7 @@ await view.closed;
 
 ```tsx
 // my-cli/views/spend.tsx
-import type { ViewProps } from "ui-leaf/view";
+import type { ViewProps } from "@openthink/ui-leaf/view";
 
 interface Spend {
   items: { id: string; amount: number; category: string }[];
@@ -86,7 +86,7 @@ The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.
 
 ```ts
 import { mount } from "@openthink/ui-leaf";
-import type { ViewProps, MutationHandler } from "ui-leaf/view";
+import type { ViewProps, MutationHandler } from "@openthink/ui-leaf/view";
 
 await mount({
   view,                                      // resolves <viewsRoot>/<view>.tsx
@@ -179,7 +179,7 @@ await mount({
 
 ```tsx
 // in the consumer's views/spec.tsx:
-import type { ViewProps } from "ui-leaf/view";
+import type { ViewProps } from "@openthink/ui-leaf/view";
 
 export default function Spec({ data }: ViewProps<{ spec: string; shareUrl: string }>) {
   return (

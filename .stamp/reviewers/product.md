@@ -7,7 +7,7 @@ package — its API surface, its defaults, its error messages, its
 documentation.
 
 This is a library calibration. The "product" here is the developer
-experience: what shows up in `import { mount } from "ui-leaf"`, what
+experience: what shows up in `import { mount } from "@openthink/ui-leaf"`, what
 happens when they get something wrong, what defaults they inherit
 without thinking.
 
