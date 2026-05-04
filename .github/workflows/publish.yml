@@ -41,21 +41,21 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "could not read ui-leaf version from package.json" >&2
+            echo "could not read @openthink/ui-leaf version from package.json" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "ui-leaf version: $VERSION"
+          echo "@openthink/ui-leaf version: $VERSION"
 
       - name: Check if already on npm
         id: check_npm
         run: |
-          if npm view "ui-leaf@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@openthink/ui-leaf@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "ui-leaf@${{ steps.version.outputs.version }} already on npm — skipping release."
+            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} already on npm — skipping release."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
+            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
           fi
 
   publish:
@@ -107,7 +107,7 @@ jobs:
         run: npm --version
 
       # Authenticates via OIDC. Requires npm-side Trusted Publisher
-      # configured at https://www.npmjs.com/package/ui-leaf/access
+      # configured at https://www.npmjs.com/package/@openthink/ui-leaf/access
       # pointing at this repo + workflow file. No NPM_TOKEN secret needed.
       - name: Publish
         run: npm publish --provenance --access public
