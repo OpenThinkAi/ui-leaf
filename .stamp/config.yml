@@ -4,6 +4,11 @@ branches:
       - security
       - standards
       - product
+    required_checks:
+      - name: typecheck
+        run: bun run typecheck
+      - name: build
+        run: bun run build
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md
