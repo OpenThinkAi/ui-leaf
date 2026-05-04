@@ -10,7 +10,7 @@
 # Run from the repo root:
 #   ./examples/bash/counter.sh
 #
-# Or from a project that has ui-leaf installed (npm i -g ui-leaf):
+# Or from a project that has ui-leaf installed (npm i -g @openthink/ui-leaf):
 #   /path/to/counter.sh
 #
 # When the browser opens, click "+1" or "-1". Each click emits a
@@ -31,7 +31,7 @@ VIEWS_ROOT="${UI_LEAF_VIEWS_ROOT:-${SCRIPT_DIR}/../../views}"
 VIEWS_ROOT="$(cd "$VIEWS_ROOT" && pwd)"
 
 # Pick the binary: prefer the local dist build (during development), fall
-# back to whatever's on PATH (e.g. `npm i -g ui-leaf`).
+# back to whatever's on PATH (e.g. `npm i -g @openthink/ui-leaf`).
 if [ -x "${SCRIPT_DIR}/../../dist/cli.js" ]; then
   UI_LEAF_BIN=("node" "${SCRIPT_DIR}/../../dist/cli.js")
 else
