@@ -65,6 +65,7 @@ export interface CompileOptions {
    * Per-launch auth token. Accepted for API symmetry with DevServerOptions;
    * the token is no longer embedded in HTML — it is delivered via the URL
    * fragment and read by the inline bootstrap script.
+   * @deprecated No-op since v1.0.0 — token delivery is handled by startDevServer.
    */
   token?: string;
   /**
@@ -97,6 +98,7 @@ export interface CompileSourceOptions {
   /**
    * Per-launch auth token. Accepted for API symmetry; not embedded in HTML —
    * see CompileOptions.token.
+   * @deprecated No-op since v1.0.0.
    */
   token?: string;
 }
@@ -105,6 +107,10 @@ export interface CompileResult {
   html: string;
   errors: BuildError[];
 }
+
+// Friendly message rendered when the page is reloaded without the token fragment.
+const SESSION_ENDED_HTML =
+  '<div style="font-family:sans-serif;padding:2em;color:#555"><p>Session ended — re-launch the CLI to continue.</p></div>';
 
 // Shared bridge injected into every compiled entry: mutation + heartbeat.
 const SHARED_BRIDGE = `
@@ -208,8 +214,11 @@ function assembleHtml(opts: {
   // never visible in history. On reload (fragment gone), sets sessionEnded so
   // the bundled module can render a friendly recovery message instead of
   // attempting unauthenticated fetches.
+  // decodeURIComponent is wrapped in try/catch: a malformed %-sequence would
+  // otherwise throw and kill the bootstrap silently; the catch falls through
+  // to sessionEnded so the user gets the recovery screen instead of a blank page.
   const bootstrapScript = `${dataInit}
-(function(){var m=/[#&]token=([^&#]*)/.exec(window.location.hash);if(m){window.__UI_LEAF__.token=decodeURIComponent(m[1]);history.replaceState(null,"",window.location.pathname+window.location.search);}else{window.__UI_LEAF__.sessionEnded=true;}})();`;
+(function(){var m=/[#&]token=([^&#]*)/.exec(window.location.hash);if(m){try{window.__UI_LEAF__.token=decodeURIComponent(m[1]);history.replaceState(null,"",window.location.pathname+window.location.search);}catch(e){window.__UI_LEAF__.sessionEnded=true;}}else{window.__UI_LEAF__.sessionEnded=true;}})();`;
 
   return `<!doctype html>
 <html lang="en">
@@ -276,9 +285,6 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
   const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-compile-"));
   try {
     const entryPath = join(tempDir, "entry.tsx");
-
-    const SESSION_ENDED_HTML =
-      '<div style="font-family:sans-serif;padding:2em;color:#555"><p>Session ended — re-launch the CLI to continue.</p></div>';
 
     const entryContent = dataLoader
       ? `import { createRoot } from "react-dom/client";
@@ -359,9 +365,6 @@ export async function compileSource(opts: CompileSourceOptions): Promise<Compile
     const entryPath = join(tempDir, "entry.tsx");
 
     await writeFile(viewPath, source);
-
-    const SESSION_ENDED_HTML =
-      '<div style="font-family:sans-serif;padding:2em;color:#555"><p>Session ended — re-launch the CLI to continue.</p></div>';
 
     const entryContent = `import { createRoot } from "react-dom/client";
 import View from ${JSON.stringify(viewPath)};

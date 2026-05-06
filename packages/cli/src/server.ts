@@ -563,6 +563,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   }
 }
 
+// Custom header (not Authorization: Bearer) so any cross-origin fetch triggers
+// a CORS preflight, which browsers block for non-same-origin callers without
+// an explicit CORS allow list. This closes the simple-form-POST / no-preflight
+// attack vector against the localhost dev server.
 function checkAuth(req: Request, token: string): boolean {
   const value = req.headers.get("x-ui-leaf-token") ?? "";
   if (!value) return false;
