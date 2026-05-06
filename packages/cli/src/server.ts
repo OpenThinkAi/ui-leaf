@@ -254,7 +254,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     port,
     openBrowser = true,
     shell = "tab",
-    heartbeatTimeoutMs = 75_000,
+    heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
     csp,
     allowedHosts,
