@@ -472,8 +472,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
       throw new Error("unreachable"); // TypeScript: loop always returns or throws
     })();
-    const server = bunServer;
-    actualPort = server.port ?? bunPort;
+    actualPort = bunServer.port ?? bunPort;
     const url = `http://127.0.0.1:${actualPort}`;
     const startedAt = Date.now();
 

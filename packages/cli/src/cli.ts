@@ -50,9 +50,8 @@
 //     disconnected: browser tab heartbeat stopped; mount stays alive.
 //     reconnected:  browser reconnected after a disconnect.
 //     closed:       mount terminated; reason is caller|signal|error.
-//     Exits 0 on closed. Exits 1 on internal error.
-//     Closing stdin from the parent triggers shutdown (any pending
-//     mutations are rejected).
+//     Exits 0 on closed with reason caller|signal; exits 1 on error.
+//     Closing stdin from the parent triggers a caller close (exit 0).
 
 import { createInterface } from "node:readline";
 import { mount, type MountOptions } from "./index.js";
@@ -347,7 +346,7 @@ async function runMount(): Promise<void> {
     emit({ type: "ready", url: view.url, port: view.port });
     const closeReason = await view.closed;
     emit({ type: "closed", reason: closeReason });
-    process.exit(0);
+    process.exit(closeReason === "error" ? 1 : 0);
   } catch (err) {
     emit({
       type: "error",
