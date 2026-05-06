@@ -6,15 +6,22 @@
 //
 //   STDIN
 //     Line 1: config object {"version":"1","view":…,"viewsRoot":…,…}
-//     Line 2+: mutation responses, one per line:
-//       {"version":"1","type":"result","id":<n>,"value":<any>}
-//       {"version":"1","type":"error","id":<n>,"message":"<text>"}
+//     Line 2+: one of:
+//       Mutation responses (identified by the `id` field):
+//         {"version":"1","type":"result","id":<n>,"value":<any>}
+//         {"version":"1","type":"error","id":<n>,"message":"<text>"}
+//       Live-update messages (no `id`):
+//         {"version":"1","type":"update","data":<any>}
+//         {"version":"1","type":"view","source":"<tsx string>"}
+//         {"version":"1","type":"patch","data":<any>,"view":{"source":"<tsx>"}}
+//         {"version":"1","type":"reopen"}
 //
 //   STDOUT
 //     {"version":"1","type":"ready","url":"<url>","port":<n>}
 //     {"version":"1","type":"mutate","id":<n>,"name":"<s>","args":<any>}
 //     {"version":"1","type":"closed"}
 //     {"version":"1","type":"error","message":"<text>"}
+//     {"version":"1","type":"error","phase":"build","message":"<text>"}
 //
 //   Version handling
 //     A missing version field on any inbound message produces
@@ -23,6 +30,18 @@
 //       {"version":"1","type":"error","message":"unsupported protocol version: <x>"}
 //     Both errors on the config message exit 1; on subsequent messages
 //     the bad line is dropped and the mount keeps running.
+//
+//   Unknown post-config message types produce:
+//     {"version":"1","type":"error","message":"unknown message type: <x>"}
+//     The mount continues (non-fatal).
+//
+//   view / patch compile failures preserve the previous view and produce:
+//     {"version":"1","type":"error","phase":"build","message":"<text>"}
+//
+//   Inline view.source constraint (v1.0.0): the TSX source string is
+//   treated as self-contained. Relative imports are not supported —
+//   the string has no filesystem context to resolve them against. Bare-
+//   package imports (react, react-dom) work via the internal alias plugin.
 //
 //   Lifecycle
 //     Exits 0 on natural close (view closed).
@@ -35,8 +54,8 @@ import { mount, type MountOptions } from "./index.js";
 import {
   emit as serializeEvent,
   parseInbound,
+  type Inbound,
   type InboundConfig,
-  type InboundMutateResponse,
   type OutboundEvent,
 } from "./ipc.js";
 
@@ -117,7 +136,6 @@ try {
 }
 
 type ConfigRequest = InboundConfig;
-type MutateResponse = InboundMutateResponse;
 
 function emit(event: OutboundEvent): void {
   realStdoutWrite(serializeEvent(event));
@@ -181,8 +199,8 @@ async function runMount(): Promise<void> {
       return;
     }
 
-    // Mutation response.
-    const outcome = parseInbound<MutateResponse>(trimmed);
+    // Post-config message: mutation response or live-update command.
+    const outcome = parseInbound<Inbound>(trimmed);
     if (!outcome.ok) {
       if (outcome.kind === "missing-version") {
         emit({ type: "error", message: "missing version field" });
@@ -192,16 +210,66 @@ async function runMount(): Promise<void> {
           message: `unsupported protocol version: ${stringifyVersion(outcome.got)}`,
         });
       }
-      // Malformed JSON falls through silently (matches prior behaviour —
-      // a non-JSON line never had an `id` to correlate with anyway).
+      // Malformed JSON falls through silently.
       return;
     }
     const msg = outcome.msg;
-    const p = pending.get(msg.id);
-    if (!p) return;
-    pending.delete(msg.id);
-    if (msg.type === "result") p.resolve(msg.value);
-    else if (msg.type === "error") p.reject(new Error(msg.message));
+
+    // Mutation responses carry an `id` field — discriminate before checking `type`.
+    if ("id" in msg && typeof msg.id === "number") {
+      const p = pending.get(msg.id);
+      if (!p) return;
+      pending.delete(msg.id);
+      if (msg.type === "result") p.resolve(msg.value);
+      else if (msg.type === "error") p.reject(new Error(msg.message));
+      return;
+    }
+
+    // Live-update commands — only dispatch if mountedView is ready.
+    if (!mountedView) return;
+
+    if (msg.type === "update") {
+      mountedView.update(msg.data);
+      return;
+    }
+
+    if (msg.type === "view") {
+      void (async () => {
+        const errors = await mountedView.swapView(msg.source);
+        if (errors.length > 0) {
+          emit({
+            type: "error",
+            phase: "build",
+            message: errors.map((e: { message: string }) => e.message).join("; "),
+          });
+        }
+      })();
+      return;
+    }
+
+    if (msg.type === "patch") {
+      void (async () => {
+        const errors = await mountedView.patch(msg.data, msg.view.source);
+        if (errors.length > 0) {
+          emit({
+            type: "error",
+            phase: "build",
+            message: errors.map((e: { message: string }) => e.message).join("; "),
+          });
+        }
+      })();
+      return;
+    }
+
+    if (msg.type === "reopen") {
+      void mountedView.reopen().catch((err: unknown) => {
+        emit({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      });
+      return;
+    }
+
+    // Unknown type — emit error, keep the mount alive.
+    emit({ type: "error", message: `unknown message type: ${(msg as { type: unknown }).type}` });
   });
 
   rl.on("close", () => {

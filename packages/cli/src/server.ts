@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import open, { apps } from "open";
-import { compileView } from "./compile.js";
+import { compileView, compileSource } from "./compile.js";
 
 // Module-level stdout redirect state. Captured ONCE at module load so
 // concurrent silent: true mounts share the same "original" reference and
@@ -179,7 +179,16 @@ export interface DevServerOptions {
    * Default: false.
    */
   silent?: boolean;
+  /**
+   * Test seam: replace the browser-open implementation. When provided,
+   * called instead of `open(url)` for both the initial open and `reopen()`.
+   * Never set this in production; use `openBrowser: false` instead.
+   */
+  _opener?: (url: string) => Promise<void>;
 }
+
+export type DevServerEvent = "data-updated" | "view-swapped";
+export type DevServerEventListener = () => void;
 
 export interface DevServer {
   url: string;
@@ -187,6 +196,37 @@ export interface DevServer {
   /** Resolves when the view is closed (heartbeat timeout) or close() is called. */
   closed: Promise<void>;
   close: () => Promise<void>;
+  /**
+   * Replace in-memory data and emit a `data-updated` event to all
+   * registered listeners. Does not recompile the view.
+   */
+  update: (data: unknown) => void;
+  /**
+   * Recompile the view from an inline TSX source string and replace the
+   * in-memory HTML. Emits `view-swapped` on success; preserves the previous
+   * HTML on compile failure. Returns errors array (empty = success).
+   */
+  swapView: (source: string) => Promise<import("./compile.js").BuildError[]>;
+  /**
+   * Atomically replace both data and view source. If compilation fails,
+   * neither takes effect. Returns errors array (empty = success).
+   */
+  patch: (data: unknown, source: string) => Promise<import("./compile.js").BuildError[]>;
+  /**
+   * Re-invoke the browser-open function to launch a fresh tab at the same URL.
+   * Always opens a new tab — if one is already connected, a duplicate opens.
+   */
+  reopen: () => Promise<void>;
+  /**
+   * Subscribe to a server-side event. Listeners are called synchronously
+   * after each mutation completes.
+   *
+   * Events:
+   *   "data-updated" — fired by update() and patch()
+   *   "view-swapped"  — fired by swapView() and patch()
+   */
+  on: (event: DevServerEvent, listener: DevServerEventListener) => void;
+  off: (event: DevServerEvent, listener: DevServerEventListener) => void;
 }
 
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
@@ -205,6 +245,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     csp,
     allowedHosts,
     silent = false,
+    _opener,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -255,7 +296,18 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       throw new Error(`ui-leaf: view compilation failed: ${msg}`);
     }
 
-    const html = result.html;
+    // Mutable view state: the / handler reads from this on every request.
+    // update(), swapView(), patch() mutate it in place.
+    const viewState = { html: result.html, data: dataLoader ? loadedData : data };
+
+    // Minimal event broker. Pre-seeded so fireEvent's get() always returns a Set.
+    const listeners = new Map<DevServerEvent, Set<DevServerEventListener>>([
+      ["data-updated", new Set()],
+      ["view-swapped", new Set()],
+    ]);
+    function fireEvent(event: DevServerEvent): void {
+      for (const fn of listeners.get(event)!) fn();
+    }
 
     let lastHeartbeatAt = Date.now();
     let closeRequested = false;
@@ -298,7 +350,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         const method = req.method;
 
         if (method === "GET" && path === "/") {
-          return new Response(html, {
+          return new Response(viewState.html, {
             status: 200,
             headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
           });
@@ -338,7 +390,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
               headers: { ...headers, "Content-Type": "application/json" },
             });
           }
-          return new Response(JSON.stringify(loadedData !== undefined ? loadedData : null), {
+          return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
             status: 200,
             headers: { ...headers, "Content-Type": "application/json" },
           });
@@ -394,18 +446,25 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
     }, 1000);
 
+    // Browser-open implementation, or the test-seam override if one was supplied.
+    const doOpen: () => Promise<void> = _opener
+      ? () => _opener(url)
+      : async () => {
+          if (shell === "app") {
+            const launched = await openInAppMode(url);
+            if (!launched) {
+              process.stderr.write(
+                `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
+              );
+              await open(url);
+            }
+          } else {
+            await open(url);
+          }
+        };
+
     if (openBrowser) {
-      if (shell === "app") {
-        const launched = await openInAppMode(url);
-        if (!launched) {
-          process.stderr.write(
-            `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
-          );
-          await open(url);
-        }
-      } else {
-        await open(url);
-      }
+      await doOpen();
     }
 
     return {
@@ -413,6 +472,49 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       port: actualPort,
       closed,
       close: cleanup,
+      on(event: DevServerEvent, listener: DevServerEventListener): void {
+        listeners.get(event)?.add(listener);
+      },
+      off(event: DevServerEvent, listener: DevServerEventListener): void {
+        listeners.get(event)?.delete(listener);
+      },
+      update(newData: unknown): void {
+        viewState.data = newData;
+        fireEvent("data-updated");
+      },
+      async swapView(source: string): Promise<import("./compile.js").BuildError[]> {
+        const r = await compileSource({
+          source,
+          data: viewState.data,
+          title,
+          csp: cspHeader ?? undefined,
+          token,
+        });
+        if (r.errors.length > 0) return r.errors;
+        viewState.html = r.html;
+        fireEvent("view-swapped");
+        return [];
+      },
+      async patch(newData: unknown, source: string): Promise<import("./compile.js").BuildError[]> {
+        // Compile first with newData so the HTML embeds the incoming data.
+        const r = await compileSource({
+          source,
+          data: newData,
+          title,
+          csp: cspHeader ?? undefined,
+          token,
+        });
+        if (r.errors.length > 0) return r.errors;
+        // Only mutate state on compile success (atomicity guarantee).
+        viewState.data = newData;
+        viewState.html = r.html;
+        fireEvent("data-updated");
+        fireEvent("view-swapped");
+        return [];
+      },
+      async reopen(): Promise<void> {
+        await doOpen();
+      },
     };
   } catch (err) {
     restoreStdout?.();

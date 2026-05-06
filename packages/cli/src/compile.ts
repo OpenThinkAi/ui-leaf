@@ -75,9 +75,148 @@ export interface CompileOptions {
   dataLoader?: boolean;
 }
 
+/**
+ * Options for compiling an inline TSX source string.
+ *
+ * v1.0.0 constraint: `source` is treated as a self-contained TSX string.
+ * Relative imports are not supported — the string has no filesystem context
+ * to resolve them against. Bare-package imports (react, react-dom) work via
+ * the react-alias plugin. This is the intended contract for IPC-driven
+ * view hot-swaps (AI-generated self-contained components).
+ */
+export interface CompileSourceOptions {
+  /** Raw TSX source string to compile. Must be a self-contained component. */
+  source: string;
+  /** JSON-serializable data injected as window.__UI_LEAF__.data. */
+  data?: unknown;
+  /** Browser tab title. Defaults to "ui-leaf". */
+  title?: string;
+  /** Raw CSP string. Undefined / absent means no CSP meta tag. */
+  csp?: string;
+  /** Per-launch auth token. */
+  token?: string;
+}
+
 export interface CompileResult {
   html: string;
   errors: BuildError[];
+}
+
+// Shared bridge injected into every compiled entry: mutation + heartbeat.
+const SHARED_BRIDGE = `
+async function mutate(name: string, args?: unknown): Promise<unknown> {
+  const res = await fetch("/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+    },
+    body: JSON.stringify({ name, args }),
+  });
+  const text = await res.text().catch(() => "");
+  if (!res.ok) {
+    let detail = text;
+    try {
+      const parsed: unknown = text ? JSON.parse(text) : null;
+      if (parsed !== null && typeof parsed === "object" && "error" in parsed && typeof (parsed as { error: unknown }).error === "string") {
+        detail = (parsed as { error: string }).error;
+      }
+    } catch { /* keep raw text */ }
+    throw new Error("ui-leaf: mutation '" + name + "' failed (" + res.status + "): " + detail);
+  }
+  return text ? JSON.parse(text) : undefined;
+}
+
+async function heartbeat(): Promise<void> {
+  try {
+    await fetch("/heartbeat", {
+      method: "POST",
+      headers: token ? { Authorization: "Bearer " + token } : {},
+    });
+  } catch { /* server may have shut down; ignore */ }
+}
+setInterval(heartbeat, 5000);
+heartbeat();`;
+
+/** Run Bun.build on `entryPath` and return the raw JS output or errors. */
+async function runBunBuild(entryPath: string): Promise<{ js: string } | { errors: BuildError[] }> {
+  let buildOutput: Awaited<ReturnType<typeof Bun.build>>;
+  try {
+    buildOutput = await Bun.build({
+      entrypoints: [entryPath],
+      target: "browser",
+      format: "esm",
+      minify: false,
+      sourcemap: "none",
+      plugins: [reactAliasPlugin],
+    });
+  } catch (err) {
+    if (err instanceof AggregateError) {
+      type BunBuildMsg = { message: string; position?: { file?: string; line?: number; column?: number } | null };
+      const errors: BuildError[] = (err.errors as BunBuildMsg[]).map((e) => ({
+        file: e.position?.file ?? "<unknown>",
+        line: e.position?.line ?? 0,
+        column: e.position?.column ?? 0,
+        message: e.message,
+      }));
+      return { errors };
+    }
+    throw err;
+  }
+  const output = buildOutput.outputs[0];
+  if (!output) {
+    return {
+      errors: [{ file: "<unknown>", line: 0, column: 0, message: "ui-leaf: Bun.build produced no output" }],
+    };
+  }
+  return { js: await output.text() };
+}
+
+/** Assemble the final HTML page from compiled JS and options. */
+function assembleHtml(opts: {
+  js: string;
+  title: string;
+  csp: string | undefined;
+  data: unknown;
+  token: string | undefined;
+  dataLoader: boolean;
+}): string {
+  const { js, title, csp, data, token, dataLoader } = opts;
+  // Escape </script> sequences to prevent script-tag break-out.
+  const safeJs = js.replace(/<\/script>/gi, "<\\/script>");
+
+  const titleEscaped = title
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const cspMeta = csp
+    ? `    <meta http-equiv="Content-Security-Policy" content="${csp.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" />\n`
+    : "";
+
+  // Double-stringify data: outer JSON.stringify produces a JSON string, then
+  // escapeForScriptTag ensures </script> and U+2028/U+2029 can't break out.
+  // Token is also passed through escapeForScriptTag so an arbitrary caller
+  // providing a non-hex token can't break out of the inline script.
+  const safeToken = token ? escapeForScriptTag(JSON.stringify(token)) : null;
+  const tokenField = safeToken ? `, token: ${safeToken}` : "";
+  const bootstrapValue = dataLoader
+    ? `{ token: ${safeToken ?? '""'} }`
+    : `{ data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))})${tokenField} }`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>${titleEscaped}</title>
+${cspMeta}    <!-- ui-leaf bootstrap -->
+    <script>window.__UI_LEAF__ = ${bootstrapValue};</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">${safeJs}</script>
+  </body>
+</html>`;
 }
 
 export async function compileView(opts: CompileOptions): Promise<CompileResult> {
@@ -126,48 +265,10 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
   }
 
   // Generate a temp entry that imports the resolved view, mounts React via
-  // createRoot, and wires the mutation/heartbeat bridge. The view's default
-  // export is a React component that cannot self-bootstrap (no createRoot
-  // call); this mirrors the existing server.ts entry.tsx pattern.
+  // createRoot, and wires the mutation/heartbeat bridge.
   const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-compile-"));
   try {
     const entryPath = join(tempDir, "entry.tsx");
-
-    // Shared bridge functions used in both entry variants.
-    const sharedBridge = `
-async function mutate(name: string, args?: unknown): Promise<unknown> {
-  const res = await fetch("/mutate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: "Bearer " + token } : {}),
-    },
-    body: JSON.stringify({ name, args }),
-  });
-  const text = await res.text().catch(() => "");
-  if (!res.ok) {
-    let detail = text;
-    try {
-      const parsed: unknown = text ? JSON.parse(text) : null;
-      if (parsed !== null && typeof parsed === "object" && "error" in parsed && typeof (parsed as { error: unknown }).error === "string") {
-        detail = (parsed as { error: string }).error;
-      }
-    } catch { /* keep raw text */ }
-    throw new Error("ui-leaf: mutation '" + name + "' failed (" + res.status + "): " + detail);
-  }
-  return text ? JSON.parse(text) : undefined;
-}
-
-async function heartbeat(): Promise<void> {
-  try {
-    await fetch("/heartbeat", {
-      method: "POST",
-      headers: token ? { Authorization: "Bearer " + token } : {},
-    });
-  } catch { /* server may have shut down; ignore */ }
-}
-setInterval(heartbeat, 5000);
-heartbeat();`;
 
     const entryContent = dataLoader
       ? `import { createRoot } from "react-dom/client";
@@ -175,7 +276,7 @@ import View from ${JSON.stringify(viewAbs)};
 
 const ctx = (globalThis as { __UI_LEAF__?: { token?: string } }).__UI_LEAF__ ?? {};
 const token = ctx.token;
-${sharedBridge}
+${SHARED_BRIDGE}
 
 async function bootstrap(): Promise<void> {
   const res = await fetch("/api/data", {
@@ -198,7 +299,7 @@ import View from ${JSON.stringify(viewAbs)};
 const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
 const data = ctx.data;
 const token = ctx.token;
-${sharedBridge}
+${SHARED_BRIDGE}
 
 const el = document.getElementById("root");
 if (!el) throw new Error("ui-leaf: #root element missing");
@@ -207,90 +308,58 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
 
     await writeFile(entryPath, entryContent);
 
-    // Bun.build throws AggregateError on build failure (syntax errors,
-    // unresolved imports, etc.) rather than returning { success: false }.
-    // Catch and map to BuildError[] so callers never see a thrown exception.
-    let buildOutput: Awaited<ReturnType<typeof Bun.build>>;
-    try {
-      buildOutput = await Bun.build({
-        entrypoints: [entryPath],
-        target: "browser",
-        format: "esm",
-        minify: false,
-        sourcemap: "none",
-        plugins: [reactAliasPlugin],
-      });
-    } catch (err) {
-      if (err instanceof AggregateError) {
-        type BunBuildMsg = { message: string; position?: { file?: string; line?: number; column?: number } | null };
-        const errors: BuildError[] = (err.errors as BunBuildMsg[]).map((e) => ({
-          file: e.position?.file ?? "<unknown>",
-          line: e.position?.line ?? 0,
-          column: e.position?.column ?? 0,
-          message: e.message,
-        }));
-        return { html: "", errors };
-      }
-      throw err;
-    }
+    const buildResult = await runBunBuild(entryPath);
+    if ("errors" in buildResult) return { html: "", errors: buildResult.errors };
 
-    const output = buildOutput.outputs[0];
-    if (!output) {
-      return {
-        html: "",
-        errors: [
-          {
-            file: "<unknown>",
-            line: 0,
-            column: 0,
-            message: "ui-leaf: Bun.build produced no output",
-          },
-        ],
-      };
-    }
+    return {
+      html: assembleHtml({ js: buildResult.js, title, csp, data, token, dataLoader }),
+      errors: [],
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
 
-    const js = await output.text();
-    // Escape </script> sequences to prevent script-tag break-out.
-    // U+2028/U+2029 are valid ECMAScript in module scripts (ES2019+) and
-    // do not appear raw in bundler output, so no further escaping is needed.
-    const safeJs = js.replace(/<\/script>/gi, "<\\/script>");
+/**
+ * Compile an inline TSX source string into a full HTML page.
+ *
+ * The source is treated as a self-contained component; relative imports are
+ * not supported (v1.0.0 constraint — the string has no filesystem context).
+ * Bare-package imports (react, react-dom) work via the react-alias plugin.
+ */
+export async function compileSource(opts: CompileSourceOptions): Promise<CompileResult> {
+  const { source, data, title = "ui-leaf", csp, token } = opts;
 
-    const titleEscaped = title
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+  const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-src-"));
+  try {
+    // Write the caller's tsx as the view file, then write a thin entry wrapper.
+    const viewPath = join(tempDir, "view.tsx");
+    const entryPath = join(tempDir, "entry.tsx");
 
-    const cspMeta = csp
-      ? `    <meta http-equiv="Content-Security-Policy" content="${csp.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" />\n`
-      : "";
+    await writeFile(viewPath, source);
 
-    // Double-stringify data: outer JSON.stringify produces a JSON string, then
-    // escapeForScriptTag ensures </script> and U+2028/U+2029 can't break out.
-    // The browser calls JSON.parse() on the embedded string — same pattern as
-    // server.ts to avoid Annex B.3.1 prototype mutation via object literals.
-    // Token is also passed through escapeForScriptTag so an arbitrary caller
-    // providing a non-hex token can't break out of the inline script.
-    const safeToken = token ? escapeForScriptTag(JSON.stringify(token)) : null;
-    const tokenField = safeToken ? `, token: ${safeToken}` : "";
-    const bootstrapValue = dataLoader
-      ? `{ token: ${safeToken ?? '""'} }`
-      : `{ data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))})${tokenField} }`;
+    const entryContent = `import { createRoot } from "react-dom/client";
+import View from ${JSON.stringify(viewPath)};
 
-    const html = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>${titleEscaped}</title>
-${cspMeta}    <!-- ui-leaf bootstrap -->
-    <script>window.__UI_LEAF__ = ${bootstrapValue};</script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module">${safeJs}</script>
-  </body>
-</html>`;
+const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
+const data = ctx.data;
+const token = ctx.token;
+${SHARED_BRIDGE}
 
-    return { html, errors: [] };
+const el = document.getElementById("root");
+if (!el) throw new Error("ui-leaf: #root element missing");
+createRoot(el).render(<View data={data} mutate={mutate} />);
+`;
+
+    await writeFile(entryPath, entryContent);
+
+    const buildResult = await runBunBuild(entryPath);
+    if ("errors" in buildResult) return { html: "", errors: buildResult.errors };
+
+    return {
+      html: assembleHtml({ js: buildResult.js, title, csp, data, token, dataLoader: false }),
+      errors: [],
+    };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

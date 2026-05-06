@@ -32,6 +32,8 @@ export type OutboundClosed = {
 export type OutboundError = {
   version: ProtocolVersion;
   type: "error";
+  /** Optional phase tag, e.g. "build" for view/patch compile failures. */
+  phase?: string;
   message: string;
 };
 
@@ -73,6 +75,50 @@ export type InboundMutateError = {
 };
 
 export type InboundMutateResponse = InboundMutateResult | InboundMutateError;
+
+// New inbound message types (v1.0.0): live-update handlers.
+
+/** Replace in-memory data and emit a data-updated SSE event. */
+export type InboundUpdate = {
+  version: ProtocolVersion;
+  type: "update";
+  data: unknown;
+};
+
+/** Swap the view source on-the-fly; triggers a recompile and view-swapped SSE event. */
+export type InboundView = {
+  version: ProtocolVersion;
+  type: "view";
+  source: string;
+};
+
+/**
+ * Atomically replace both data and view source. If the compile fails, neither
+ * takes effect and the previous state is preserved.
+ */
+export type InboundPatch = {
+  version: ProtocolVersion;
+  type: "patch";
+  data: unknown;
+  view: { source: string };
+};
+
+/** Re-invoke open(url) to launch a fresh browser tab at the same URL. */
+export type InboundReopen = {
+  version: ProtocolVersion;
+  type: "reopen";
+};
+
+/**
+ * Discriminated union of all valid post-config inbound messages. Discriminate
+ * on `type`; mutation responses are identified by the presence of an `id` field.
+ */
+export type Inbound =
+  | InboundMutateResponse
+  | InboundUpdate
+  | InboundView
+  | InboundPatch
+  | InboundReopen;
 
 // `Omit<U, K>` collapses a discriminated union by intersecting the
 // remaining keys; the distributive form preserves the variants so the
