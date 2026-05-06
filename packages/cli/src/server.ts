@@ -197,8 +197,8 @@ export interface DevServer {
   closed: Promise<void>;
   close: () => Promise<void>;
   /**
-   * Replace in-memory data and emit a `data-updated` event.
-   * The browser fetches fresh data via GET /api/data (AGT-126 SSE channel).
+   * Replace in-memory data and emit a `data-updated` event to all
+   * registered listeners. Does not recompile the view.
    */
   update: (data: unknown) => void;
   /**
@@ -213,14 +213,13 @@ export interface DevServer {
    */
   patch: (data: unknown, source: string) => Promise<import("./compile.js").BuildError[]>;
   /**
-   * Re-invoke open(url) to launch a fresh browser tab at the same URL.
-   * Always opens (duplicates if a tab is already connected).
-   * `reconnected` event after tab connects is AGT-125's responsibility.
+   * Re-invoke the browser-open function to launch a fresh tab at the same URL.
+   * Always opens a new tab — if one is already connected, a duplicate opens.
    */
   reopen: () => Promise<void>;
   /**
    * Subscribe to a server-side event. Listeners are called synchronously
-   * after each mutation completes. This is the public contract for AGT-126.
+   * after each mutation completes.
    *
    * Events:
    *   "data-updated" — fired by update() and patch()
@@ -298,17 +297,16 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     }
 
     // Mutable view state: the / handler reads from this on every request.
-    // update(), swapView(), patch() mutate it in place. Stdin is a serial
-    // line stream so no extra locking primitive is needed.
+    // update(), swapView(), patch() mutate it in place.
     const viewState = { html: result.html, data: dataLoader ? loadedData : data };
 
-    // Minimal event broker — the public contract for AGT-126's SSE channel.
+    // Minimal event broker. Pre-seeded so fireEvent's get() always returns a Set.
     const listeners = new Map<DevServerEvent, Set<DevServerEventListener>>([
       ["data-updated", new Set()],
       ["view-swapped", new Set()],
     ]);
     function fireEvent(event: DevServerEvent): void {
-      for (const fn of listeners.get(event) ?? []) fn();
+      for (const fn of listeners.get(event)!) fn();
     }
 
     let lastHeartbeatAt = Date.now();

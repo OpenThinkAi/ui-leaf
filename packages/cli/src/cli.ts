@@ -262,7 +262,9 @@ async function runMount(): Promise<void> {
     }
 
     if (msg.type === "reopen") {
-      void mountedView.reopen();
+      void mountedView.reopen().catch((err: unknown) => {
+        emit({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      });
       return;
     }
 

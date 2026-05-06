@@ -189,13 +189,13 @@ export interface MountedView {
   /** Force-close the dev server early. */
   close: () => Promise<void>;
   /**
-   * Replace in-memory data and emit a `data-updated` event (picked up by the
-   * AGT-126 SSE channel). Preserves in-page React state — no recompile.
+   * Replace in-memory data and notify all `data-updated` listeners.
+   * Preserves in-page React state — no recompile.
    */
   update: (data: unknown) => void;
   /**
    * Swap the view source on the fly. Triggers a recompile; on success replaces
-   * the served HTML and emits `view-swapped` (browser reloads). On compile
+   * the served HTML and notifies all `view-swapped` listeners. On compile
    * failure the previous HTML is preserved. Returns compile errors if any.
    */
   swapView: (source: string) => Promise<BuildError[]>;
@@ -205,8 +205,8 @@ export interface MountedView {
    */
   patch: (data: unknown, source: string) => Promise<BuildError[]>;
   /**
-   * Re-invoke open(url) to launch a fresh browser tab at the same URL.
-   * Always opens — if a tab is already connected, a duplicate opens.
+   * Re-invoke the browser-open function to launch a fresh tab at the same URL.
+   * Always opens a new tab — if one is already connected, a duplicate opens.
    */
   reopen: () => Promise<void>;
   /** Subscribe to a server-side event (data-updated | view-swapped). */
