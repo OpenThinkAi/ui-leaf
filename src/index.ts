@@ -14,7 +14,22 @@ export type { CspOption, MutationHandler, Shell };
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
   view: string;
-  /** JSON-serializable data passed to the view as a prop. */
+  /**
+   * JSON-serializable data passed to the view as a prop.
+   *
+   * Privacy caveat: ui-leaf serialises this payload into
+   * `<tmpdir()>/ui-leaf-XXXXXX/index.html` for the mount lifetime, and
+   * any same-UID local process that can reach `127.0.0.1:<port>` can
+   * fetch `/index.html` and read it — the per-launch token guards
+   * `/mutate` against drive-by cross-origin requests in the browser, not
+   * against other processes on the machine. For PHI, PCI, financial
+   * records, or anything else where a same-UID local reader is in your
+   * threat model, do not pass the sensitive payload through `data`;
+   * keep it in memory in your CLI and inject it into the view via an
+   * authenticated `connect-src 'self'` fetch on boot. See the README
+   * sections "How it works" and "Data-at-rest in the temp directory"
+   * for the full framing.
+   */
   data: unknown;
   /**
    * Mutation handlers the view can call via mutate(name, args).
