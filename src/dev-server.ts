@@ -6,7 +6,7 @@ import { rmSync } from "node:fs";
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
-import { createServer as createTcpServer } from "node:net";
+import { createServer as createTcpServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { createRsbuild } from "@rsbuild/core";
@@ -597,12 +597,27 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   const url = `http://127.0.0.1:${actualPort}`;
   const startedAt = Date.now();
 
+  // DNS-rebinding gate for WebSocket upgrades. The setupMiddlewares stack
+  // above only fires for `request` events — `upgrade` events bypass it
+  // entirely and reach rsbuild's HMR socket directly. Prepend a listener
+  // on the underlying http server so our Host check runs before rsbuild's
+  // HMR upgrade handler; on reject we destroy the socket (pure TCP close,
+  // no HTTP response) so no HMR frames can leak to a rebound origin.
+  const httpServer = devServer.server.httpServer;
+  const upgradeGate = (req: IncomingMessage, socket: Socket): void => {
+    if (!isAllowedHost(req.headers.host, allowedHostSet)) {
+      socket.destroy();
+    }
+  };
+  httpServer?.prependListener("upgrade", upgradeGate);
+
   let heartbeatWatcher: NodeJS.Timeout | undefined;
 
   const cleanup = async (): Promise<void> => {
     if (closeRequested) return;
     closeRequested = true;
     if (heartbeatWatcher) clearInterval(heartbeatWatcher);
+    httpServer?.removeListener("upgrade", upgradeGate);
     await devServer.server.close();
     await rm(dirToSweep, { recursive: true, force: true });
     // Listener is per-mount — unhook so long-lived hosts that mount many
