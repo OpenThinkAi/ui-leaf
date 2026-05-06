@@ -72,6 +72,7 @@ async function openInAppMode(url: string): Promise<boolean> {
 const STRICT_CSP = [
   "default-src 'self'",
   "connect-src 'self'",
+  "form-action 'self'",
   "img-src 'self' data: https:",
   "font-src 'self' https: data:",
   "style-src 'self' 'unsafe-inline'",
@@ -256,7 +257,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     shell = "tab",
     heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
-    csp,
+    csp = "strict",
     allowedHosts,
     silent = false,
     _opener,

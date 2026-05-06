@@ -104,7 +104,7 @@ await mount({
   port,                                      // optional, default: 5810 (auto-bumps if busy; pass 0 for OS-assigned)
   openBrowser,                               // optional, default: true
   shell,                                     // optional, "tab" | "app", default: "tab"
-  csp,                                       // optional, default: "off" (see Hardening)
+  csp,                                       // optional, default: "strict" (see Hardening)
   silent,                                    // optional, default: false (see Programmatic use)
   signal,                                    // optional AbortSignal
   heartbeatTimeoutMs,                        // optional, default: 5000
@@ -118,30 +118,32 @@ Returns `{ url, port, closed, close }`.
 
 ## Hardening: locking the data/mutation contract with CSP
 
-By default, the data/mutation routing is **convention, not enforcement** — a view file is JavaScript in a browser tab and can `fetch()` anywhere it likes. Most consumers don't need more than that.
+By default, ui-leaf **browser-enforces the broker principle** via `csp: "strict"`. The view physically cannot reach external endpoints — `fetch()` to any non-loopback origin is blocked at the CSP layer, and HTML form submissions are locked to same-origin. All data flows through `data` and `mutations`.
 
-When you do want to enforce it (typically: views handle data sensitive enough that you don't want a forked view to be able to exfiltrate it), opt in via `csp`:
+The default strict preset:
+
+- **`connect-src 'self'`** — the architectural lock. Views cannot fetch external APIs.
+- **`form-action 'self'`** — closes the form-submit exfiltration vector.
+- **`img-src 'self' https: data:`** — permits HTTPS images and data URIs.
+- **`font-src 'self' https: data:`** — permits CDN fonts.
+- **`style-src 'self' 'unsafe-inline'`** and **`script-src 'self' 'unsafe-inline'`** — required for React.
+
+Because the policy is sent as an HTTP response header, views cannot relax it at runtime. The only way to weaken the policy is to change the `mount()` call (i.e. fork the consumer CLI, not the view).
+
+If you have a legitimate need for cross-origin access (e.g. views that talk to a companion API), opt out:
 
 ```ts
 mount({
   view: "report",
   data: { ... },
-  csp: "strict",   // or a custom CSP string for full control
+  csp: "off",   // no CSP header; views can fetch arbitrary URLs
 });
 ```
 
-`csp: "strict"` ships a balanced preset that:
-
-- **Locks `connect-src` to same-origin** — the architectural lock. Views cannot fetch external APIs; all data flows through `data` and `mutations`.
-- **Permits HTTPS images and fonts** so views can load CDN assets normally.
-- **Allows inline styles and inline scripts** for React.
-
-Because the policy is sent as an HTTP response header, views cannot relax it at runtime. The only way to weaken the policy is to change the `mount()` call (i.e. fork the consumer CLI, not the view).
-
-If the preset is too strict for your case (e.g. you need to allow Sentry telemetry), pass a raw CSP string:
+For partial relaxation (e.g. allow Sentry telemetry but keep everything else locked), pass a raw CSP string:
 
 ```ts
-csp: "default-src 'self'; connect-src 'self' https://sentry.io; img-src 'self' https:;"
+csp: "default-src 'self'; connect-src 'self' https://sentry.io; form-action 'self'; img-src 'self' https:;"
 ```
 
 ### DNS-rebinding defence
