@@ -24,9 +24,22 @@ export type OutboundMutate = {
   args: unknown;
 };
 
+export type CloseReason = "caller" | "signal" | "error";
+
+export type OutboundDisconnected = {
+  version: ProtocolVersion;
+  type: "disconnected";
+};
+
+export type OutboundReconnected = {
+  version: ProtocolVersion;
+  type: "reconnected";
+};
+
 export type OutboundClosed = {
   version: ProtocolVersion;
   type: "closed";
+  reason: CloseReason;
 };
 
 export type OutboundError = {
@@ -41,6 +54,8 @@ export type Outbound =
   | OutboundReady
   | OutboundMutate
   | OutboundClosed
+  | OutboundDisconnected
+  | OutboundReconnected
   | OutboundError;
 
 // Inbound: messages the binary reads on stdin (line 1 = config, lines 2+ =
@@ -109,6 +124,12 @@ export type InboundReopen = {
   type: "reopen";
 };
 
+/** Terminate the mount cleanly (caller-initiated close). */
+export type InboundClose = {
+  version: ProtocolVersion;
+  type: "close";
+};
+
 /**
  * Discriminated union of all valid post-config inbound messages. Discriminate
  * on `type`; mutation responses are identified by the presence of an `id` field.
@@ -118,7 +139,8 @@ export type Inbound =
   | InboundUpdate
   | InboundView
   | InboundPatch
-  | InboundReopen;
+  | InboundReopen
+  | InboundClose;
 
 // `Omit<U, K>` collapses a discriminated union by intersecting the
 // remaining keys; the distributive form preserves the variants so the

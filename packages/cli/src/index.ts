@@ -4,6 +4,7 @@
 import { resolve } from "node:path";
 import {
   startDevServer,
+  type CloseReason,
   type CspOption,
   type DevServerEvent,
   type DevServerEventListener,
@@ -12,7 +13,7 @@ import {
 } from "./server.js";
 import type { BuildError } from "./compile.js";
 
-export type { BuildError, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
+export type { BuildError, CloseReason, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
 
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
@@ -172,11 +173,13 @@ export interface MountOptions {
    * Grace period (ms) after server start before the heartbeat watcher arms.
    * Cold-loading clients sometimes take a few seconds to send their first
    * heartbeat. Defaults to 30000.
-   *
-   * If no client connects within (startupGraceMs + heartbeatTimeoutMs),
-   * the server shuts down on its own.
    */
   startupGraceMs?: number;
+  /**
+   * Test seam: heartbeat watcher tick interval (ms). Defaults to 1000.
+   * Never set this in production.
+   */
+  _heartbeatCheckIntervalMs?: number;
 }
 
 export interface MountedView {
@@ -184,8 +187,8 @@ export interface MountedView {
   url: string;
   /** Bound port. Useful when port: 0 was requested. */
   port: number;
-  /** Resolves when the view closes (heartbeat timeout) or close() is called. */
-  closed: Promise<void>;
+  /** Resolves with the close reason when the mount terminates. */
+  closed: Promise<CloseReason>;
   /** Force-close the dev server early. */
   close: () => Promise<void>;
   /**
@@ -250,11 +253,12 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     csp: opts.csp,
     allowedHosts: opts.allowedHosts,
     silent: opts.silent,
+    _heartbeatCheckIntervalMs: opts._heartbeatCheckIntervalMs,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {
     void (async () => {
-      await server.close();
+      await server.close("signal");
       // Re-raise so default exit codes still apply.
       process.kill(process.pid, signal);
     })();
@@ -272,8 +276,8 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
       return {
         url: server.url,
         port: server.port,
-        closed: Promise.resolve(),
-        close: server.close,
+        closed: Promise.resolve<CloseReason>("caller"),
+        close: () => server.close(),
         update: server.update.bind(server),
         swapView: (source: string) => server.swapView(source),
         patch: (data: unknown, source: string) => server.patch(data, source),
@@ -298,7 +302,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     url: server.url,
     port: server.port,
     closed,
-    close: server.close,
+    close: () => server.close(),
     update: server.update.bind(server),
     swapView: (source: string) => server.swapView(source),
     patch: (data: unknown, source: string) => server.patch(data, source),

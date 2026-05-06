@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import open, { apps } from "open";
 import { compileView, compileSource } from "./compile.js";
+import type { CloseReason } from "./ipc.js";
 
 // Module-level stdout redirect state. Captured ONCE at module load so
 // concurrent silent: true mounts share the same "original" reference and
@@ -156,10 +157,19 @@ export interface DevServerOptions {
    *   with a stderr note. Safari and Firefox always fall back.
    */
   shell?: Shell;
-  /** Heartbeat-stop window in ms. Browser silence longer than this triggers shutdown. */
+  /**
+   * Browser silence (ms) after which the mount transitions to disconnected.
+   * The mount does NOT terminate on disconnect — only explicit close/signal/error does.
+   */
   heartbeatTimeoutMs?: number;
   /** Grace period after server start before the heartbeat watcher is armed. */
   startupGraceMs?: number;
+  /**
+   * Test seam: interval (ms) for the heartbeat watcher tick. Defaults to 1000.
+   * Lower values let tests observe disconnect transitions without sleeping ~1s.
+   * Never set this in production.
+   */
+  _heartbeatCheckIntervalMs?: number;
   /** Content-Security-Policy enforcement. See MountOptions.csp. */
   csp?: CspOption;
   /**
@@ -187,15 +197,19 @@ export interface DevServerOptions {
   _opener?: (url: string) => Promise<void>;
 }
 
-export type DevServerEvent = "data-updated" | "view-swapped";
+export type { CloseReason };
+
+export type DevServerEvent = "data-updated" | "view-swapped" | "disconnected" | "reconnected";
 export type DevServerEventListener = () => void;
+
+type ConnectionState = "connecting" | "connected" | "disconnected";
 
 export interface DevServer {
   url: string;
   port: number;
-  /** Resolves when the view is closed (heartbeat timeout) or close() is called. */
-  closed: Promise<void>;
-  close: () => Promise<void>;
+  /** Resolves with the close reason when the mount terminates. */
+  closed: Promise<CloseReason>;
+  close: (reason?: CloseReason) => Promise<void>;
   /**
    * Replace in-memory data and emit a `data-updated` event to all
    * registered listeners. Does not recompile the view.
@@ -246,6 +260,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     allowedHosts,
     silent = false,
     _opener,
+    _heartbeatCheckIntervalMs = 1000,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -304,6 +319,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     const listeners = new Map<DevServerEvent, Set<DevServerEventListener>>([
       ["data-updated", new Set()],
       ["view-swapped", new Set()],
+      ["disconnected", new Set()],
+      ["reconnected", new Set()],
     ]);
     function fireEvent(event: DevServerEvent): void {
       for (const fn of listeners.get(event)!) fn();
@@ -311,8 +328,9 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
     let lastHeartbeatAt = Date.now();
     let closeRequested = false;
-    let resolveClosed: () => void = () => {};
-    const closed = new Promise<void>((r) => {
+    let connectionState: ConnectionState = "connecting";
+    let resolveClosed: (reason: CloseReason) => void = () => {};
+    const closed = new Promise<CloseReason>((r) => {
       resolveClosed = r;
     });
 
@@ -364,6 +382,12 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
             });
           }
           lastHeartbeatAt = Date.now();
+          if (connectionState === "disconnected") {
+            connectionState = "connected";
+            fireEvent("reconnected");
+          } else if (connectionState === "connecting") {
+            connectionState = "connected";
+          }
           return new Response("", { status: 204, headers });
         }
 
@@ -429,22 +453,26 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
     let heartbeatWatcher: NodeJS.Timeout | undefined;
 
-    const cleanup = async (): Promise<void> => {
+    const cleanup = async (reason: CloseReason): Promise<void> => {
       if (closeRequested) return;
       closeRequested = true;
       if (heartbeatWatcher) clearInterval(heartbeatWatcher);
       await server.stop(true);
       if (restoreStdout) restoreStdout();
-      resolveClosed();
+      resolveClosed(reason);
     };
 
     heartbeatWatcher = setInterval(() => {
+      if (closeRequested) return;
       const now = Date.now();
       if (now - startedAt < startupGraceMs) return;
       if (now - lastHeartbeatAt > heartbeatTimeoutMs) {
-        void cleanup();
+        if (connectionState !== "disconnected") {
+          connectionState = "disconnected";
+          fireEvent("disconnected");
+        }
       }
-    }, 1000);
+    }, _heartbeatCheckIntervalMs);
 
     // Browser-open implementation, or the test-seam override if one was supplied.
     const doOpen: () => Promise<void> = _opener
@@ -471,7 +499,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       url,
       port: actualPort,
       closed,
-      close: cleanup,
+      close: (reason: CloseReason = "caller") => cleanup(reason),
       on(event: DevServerEvent, listener: DevServerEventListener): void {
         listeners.get(event)?.add(listener);
       },

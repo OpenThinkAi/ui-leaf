@@ -15,11 +15,14 @@
 //         {"version":"1","type":"view","source":"<tsx string>"}
 //         {"version":"1","type":"patch","data":<any>,"view":{"source":"<tsx>"}}
 //         {"version":"1","type":"reopen"}
+//         {"version":"1","type":"close"}
 //
 //   STDOUT
 //     {"version":"1","type":"ready","url":"<url>","port":<n>}
 //     {"version":"1","type":"mutate","id":<n>,"name":"<s>","args":<any>}
-//     {"version":"1","type":"closed"}
+//     {"version":"1","type":"disconnected"}
+//     {"version":"1","type":"reconnected"}
+//     {"version":"1","type":"closed","reason":"caller"|"signal"|"error"}
 //     {"version":"1","type":"error","message":"<text>"}
 //     {"version":"1","type":"error","phase":"build","message":"<text>"}
 //
@@ -44,8 +47,10 @@
 //   package imports (react, react-dom) work via the internal alias plugin.
 //
 //   Lifecycle
-//     Exits 0 on natural close (view closed).
-//     Exits 1 on internal error.
+//     disconnected: browser tab heartbeat stopped; mount stays alive.
+//     reconnected:  browser reconnected after a disconnect.
+//     closed:       mount terminated; reason is caller|signal|error.
+//     Exits 0 on closed. Exits 1 on internal error.
 //     Closing stdin from the parent triggers shutdown (any pending
 //     mutations are rejected).
 
@@ -268,6 +273,11 @@ async function runMount(): Promise<void> {
       return;
     }
 
+    if (msg.type === "close") {
+      void mountedView.close();
+      return;
+    }
+
     // Unknown type — emit error, keep the mount alive.
     emit({ type: "error", message: `unknown message type: ${(msg as { type: unknown }).type}` });
   });
@@ -332,9 +342,11 @@ async function runMount(): Promise<void> {
     if (stdinClosed) {
       void view.close();
     }
+    view.on("disconnected", () => emit({ type: "disconnected" }));
+    view.on("reconnected", () => emit({ type: "reconnected" }));
     emit({ type: "ready", url: view.url, port: view.port });
-    await view.closed;
-    emit({ type: "closed" });
+    const closeReason = await view.closed;
+    emit({ type: "closed", reason: closeReason });
     process.exit(0);
   } catch (err) {
     emit({
