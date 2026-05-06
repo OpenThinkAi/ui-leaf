@@ -74,7 +74,7 @@ const STRICT_CSP = [
   "img-src 'self' data: https:",
   "font-src 'self' https: data:",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'",
 ].join("; ");
 
 function resolveCsp(opt: CspOption | undefined): string | null {
@@ -264,19 +264,12 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       resolveClosed = r;
     });
 
-    // Bun.serve fetch handler. Closes over token, html, mutations, etc.
-    // bunPort is declared before the server so the fetch handler can safely
-    // read the port from the same variable rather than closing over server.port
-    // (which would be a TDZ read if Bun ever dispatched during construction).
     const bunPort = port === undefined ? 5810 : port; // port: 0 → OS picks
-    // Capture the bound port as a let so the fetch handler and error messages
-    // can reference it without a temporal dead zone — it is set immediately
-    // after Bun.serve() returns, before any request can be processed.
     let actualPort = bunPort;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: bunPort,
-      fetch(req: Request): Response | Promise<Response> {
+    // Auto-bump: if bunPort is busy, try bunPort+1 … up to MAX_PORT_ATTEMPTS.
+    // port: 0 goes straight to Bun (OS assigns a free port; never EADDRINUSE).
+    const server = (() => {
+      const handler = (req: Request): Response | Promise<Response> => {
         const host = req.headers.get("host") ?? undefined;
         const origin = req.headers.get("origin") ?? undefined;
 
@@ -355,8 +348,28 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
           status: 404,
           headers: { ...headers, "Content-Type": "application/json" },
         });
-      },
-    });
+      };
+      if (bunPort === 0) {
+        return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+      }
+      const MAX_PORT_ATTEMPTS = 10;
+      for (let i = 0; i < MAX_PORT_ATTEMPTS; i++) {
+        try {
+          return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler });
+        } catch (err) {
+          const isAddrinuse = err instanceof Error && err.message.includes("EADDRINUSE");
+          if (!isAddrinuse || i === MAX_PORT_ATTEMPTS - 1) {
+            if (isAddrinuse) {
+              throw new Error(
+                `ui-leaf: ports ${bunPort}–${bunPort + MAX_PORT_ATTEMPTS - 1} are all in use. Pass { port: 0 } to mount() for an OS-assigned port.`,
+              );
+            }
+            throw err;
+          }
+        }
+      }
+      throw new Error("unreachable"); // TypeScript: loop always returns or throws
+    })();
 
     actualPort = server.port ?? bunPort;
     const url = `http://127.0.0.1:${actualPort}`;

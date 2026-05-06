@@ -69,9 +69,9 @@ export interface MountOptions {
   title?: string;
   /**
    * Port to bind. Defaults to 5810 — unused by the major Node dev tools.
-   * Pass `0` to let the OS pick a free port; the actual bound port is
-   * reflected on the returned `url` and `port`. If a specific port is
-   * requested and already in use, mount() rejects with EADDRINUSE.
+   * If the port is unavailable, ui-leaf bumps to the next free port and
+   * the actual bound port is reflected on the returned `url` and `port`.
+   * Pass `0` to let the OS pick a free port directly.
    * Override only if you need a stable URL (e.g. an external bookmark).
    */
   port?: number;

@@ -97,7 +97,7 @@ await mount({
   mutations,                                 // Record<string, MutationHandler> (optional)
   viewsRoot,                                 // optional, default: <cwd>/views
   title,                                     // optional, default: "ui-leaf"
-  port,                                      // optional, default: 5810 (pass 0 for OS-assigned; throws EADDRINUSE if port is busy)
+  port,                                      // optional, default: 5810 (auto-bumps if busy; pass 0 for OS-assigned)
   openBrowser,                               // optional, default: true
   shell,                                     // optional, "tab" | "app", default: "tab"
   csp,                                       // optional, default: "off" (see Hardening)
