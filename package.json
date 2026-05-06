@@ -43,10 +43,11 @@
     "README.md",
     "LICENSE"
   ],
+  "workspaces": ["packages/*"],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b && tsc --noEmit -p tsconfig.src.json",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
