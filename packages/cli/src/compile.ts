@@ -62,8 +62,10 @@ export interface CompileOptions {
    */
   allowedHosts?: string[];
   /**
-   * Per-launch auth token. When provided, included as window.__UI_LEAF__.token
-   * so the browser-side bridge can authenticate /mutate and /heartbeat calls.
+   * Per-launch auth token. Accepted for API symmetry with DevServerOptions;
+   * the token is no longer embedded in HTML — it is delivered via the URL
+   * fragment and read by the inline bootstrap script.
+   * @deprecated No-op since v1.0.0 — token delivery is handled by startDevServer.
    */
   token?: string;
   /**
@@ -93,7 +95,11 @@ export interface CompileSourceOptions {
   title?: string;
   /** Raw CSP string. Undefined / absent means no CSP meta tag. */
   csp?: string;
-  /** Per-launch auth token. */
+  /**
+   * Per-launch auth token. Accepted for API symmetry; not embedded in HTML —
+   * see CompileOptions.token.
+   * @deprecated No-op since v1.0.0.
+   */
   token?: string;
 }
 
@@ -102,6 +108,10 @@ export interface CompileResult {
   errors: BuildError[];
 }
 
+// Friendly message rendered when the page is reloaded without the token fragment.
+const SESSION_ENDED_HTML =
+  '<div style="font-family:sans-serif;padding:2em;color:#555"><p>Session ended — re-launch the CLI to continue.</p></div>';
+
 // Shared bridge injected into every compiled entry: mutation + heartbeat.
 const SHARED_BRIDGE = `
 async function mutate(name: string, args?: unknown): Promise<unknown> {
@@ -109,7 +119,7 @@ async function mutate(name: string, args?: unknown): Promise<unknown> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: "Bearer " + token } : {}),
+      ...(token ? { "X-UI-Leaf-Token": token } : {}),
     },
     body: JSON.stringify({ name, args }),
   });
@@ -131,7 +141,7 @@ async function heartbeat(): Promise<void> {
   try {
     await fetch("/heartbeat", {
       method: "POST",
-      headers: token ? { Authorization: "Bearer " + token } : {},
+      headers: token ? { "X-UI-Leaf-Token": token } : {},
     });
   } catch { /* server may have shut down; ignore */ }
 }
@@ -178,10 +188,9 @@ function assembleHtml(opts: {
   title: string;
   csp: string | undefined;
   data: unknown;
-  token: string | undefined;
   dataLoader: boolean;
 }): string {
-  const { js, title, csp, data, token, dataLoader } = opts;
+  const { js, title, csp, data, dataLoader } = opts;
   // Escape </script> sequences to prevent script-tag break-out.
   const safeJs = js.replace(/<\/script>/gi, "<\\/script>");
 
@@ -196,13 +205,20 @@ function assembleHtml(opts: {
 
   // Double-stringify data: outer JSON.stringify produces a JSON string, then
   // escapeForScriptTag ensures </script> and U+2028/U+2029 can't break out.
-  // Token is also passed through escapeForScriptTag so an arbitrary caller
-  // providing a non-hex token can't break out of the inline script.
-  const safeToken = token ? escapeForScriptTag(JSON.stringify(token)) : null;
-  const tokenField = safeToken ? `, token: ${safeToken}` : "";
-  const bootstrapValue = dataLoader
-    ? `{ token: ${safeToken ?? '""'} }`
-    : `{ data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))})${tokenField} }`;
+  const dataInit = dataLoader
+    ? "window.__UI_LEAF__ = {};"
+    : `window.__UI_LEAF__ = { data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))}) };`;
+
+  // Bootstrap: reads token from URL fragment, stashes it on __UI_LEAF__.token,
+  // then immediately clears the fragment from the URL bar so the token is
+  // never visible in history. On reload (fragment gone), sets sessionEnded so
+  // the bundled module can render a friendly recovery message instead of
+  // attempting unauthenticated fetches.
+  // decodeURIComponent is wrapped in try/catch: a malformed %-sequence would
+  // otherwise throw and kill the bootstrap silently; the catch falls through
+  // to sessionEnded so the user gets the recovery screen instead of a blank page.
+  const bootstrapScript = `${dataInit}
+(function(){var m=/[#&]token=([^&#]*)/.exec(window.location.hash);if(m){try{window.__UI_LEAF__.token=decodeURIComponent(m[1]);history.replaceState(null,"",window.location.pathname+window.location.search);}catch(e){window.__UI_LEAF__.sessionEnded=true;}}else{window.__UI_LEAF__.sessionEnded=true;}})();`;
 
   return `<!doctype html>
 <html lang="en">
@@ -210,7 +226,7 @@ function assembleHtml(opts: {
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
 ${cspMeta}    <!-- ui-leaf bootstrap -->
-    <script>window.__UI_LEAF__ = ${bootstrapValue};</script>
+    <script>${bootstrapScript}</script>
   </head>
   <body>
     <div id="root"></div>
@@ -226,9 +242,9 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
     data,
     title = "ui-leaf",
     csp,
-    // allowedHosts has no compile-time effect; accepted for API symmetry.
+    // allowedHosts and token have no compile-time effect; accepted for API symmetry.
     allowedHosts: _allowedHosts,
-    token,
+    token: _token,
     dataLoader = false,
   } = opts;
 
@@ -274,36 +290,48 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
       ? `import { createRoot } from "react-dom/client";
 import View from ${JSON.stringify(viewAbs)};
 
-const ctx = (globalThis as { __UI_LEAF__?: { token?: string } }).__UI_LEAF__ ?? {};
+const ctx = (globalThis as { __UI_LEAF__?: { token?: string; sessionEnded?: boolean } }).__UI_LEAF__ ?? {};
 const token = ctx.token;
+
+if (ctx.sessionEnded) {
+  const root = document.getElementById("root");
+  if (root) root.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
+} else {
 ${SHARED_BRIDGE}
 
-async function bootstrap(): Promise<void> {
-  const res = await fetch("/api/data", {
-    headers: token ? { Authorization: "Bearer " + token } : {},
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
+  async function bootstrap(): Promise<void> {
+    const res = await fetch("/api/data", {
+      headers: token ? { "X-UI-Leaf-Token": token } : {},
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
+    }
+    const data = await res.json();
+    const el = document.getElementById("root");
+    if (!el) throw new Error("ui-leaf: #root element missing");
+    createRoot(el).render(<View data={data} mutate={mutate} />);
   }
-  const data = await res.json();
-  const el = document.getElementById("root");
-  if (!el) throw new Error("ui-leaf: #root element missing");
-  createRoot(el).render(<View data={data} mutate={mutate} />);
+  bootstrap();
 }
-bootstrap();
 `
       : `import { createRoot } from "react-dom/client";
 import View from ${JSON.stringify(viewAbs)};
 
-const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
-const data = ctx.data;
+const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string; sessionEnded?: boolean } }).__UI_LEAF__ ?? {};
 const token = ctx.token;
+
+if (ctx.sessionEnded) {
+  const root = document.getElementById("root");
+  if (root) root.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
+} else {
+  const data = ctx.data;
 ${SHARED_BRIDGE}
 
-const el = document.getElementById("root");
-if (!el) throw new Error("ui-leaf: #root element missing");
-createRoot(el).render(<View data={data} mutate={mutate} />);
+  const el = document.getElementById("root");
+  if (!el) throw new Error("ui-leaf: #root element missing");
+  createRoot(el).render(<View data={data} mutate={mutate} />);
+}
 `;
 
     await writeFile(entryPath, entryContent);
@@ -312,7 +340,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     if ("errors" in buildResult) return { html: "", errors: buildResult.errors };
 
     return {
-      html: assembleHtml({ js: buildResult.js, title, csp, data, token, dataLoader }),
+      html: assembleHtml({ js: buildResult.js, title, csp, data, dataLoader }),
       errors: [],
     };
   } finally {
@@ -328,7 +356,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
  * Bare-package imports (react, react-dom) work via the react-alias plugin.
  */
 export async function compileSource(opts: CompileSourceOptions): Promise<CompileResult> {
-  const { source, data, title = "ui-leaf", csp, token } = opts;
+  const { source, data, title = "ui-leaf", csp, token: _token } = opts;
 
   const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-src-"));
   try {
@@ -341,14 +369,20 @@ export async function compileSource(opts: CompileSourceOptions): Promise<Compile
     const entryContent = `import { createRoot } from "react-dom/client";
 import View from ${JSON.stringify(viewPath)};
 
-const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
-const data = ctx.data;
+const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string; sessionEnded?: boolean } }).__UI_LEAF__ ?? {};
 const token = ctx.token;
+
+if (ctx.sessionEnded) {
+  const root = document.getElementById("root");
+  if (root) root.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
+} else {
+  const data = ctx.data;
 ${SHARED_BRIDGE}
 
-const el = document.getElementById("root");
-if (!el) throw new Error("ui-leaf: #root element missing");
-createRoot(el).render(<View data={data} mutate={mutate} />);
+  const el = document.getElementById("root");
+  if (!el) throw new Error("ui-leaf: #root element missing");
+  createRoot(el).render(<View data={data} mutate={mutate} />);
+}
 `;
 
     await writeFile(entryPath, entryContent);
@@ -357,7 +391,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     if ("errors" in buildResult) return { html: "", errors: buildResult.errors };
 
     return {
-      html: assembleHtml({ js: buildResult.js, title, csp, data, token, dataLoader: false }),
+      html: assembleHtml({ js: buildResult.js, title, csp, data, dataLoader: false }),
       errors: [],
     };
   } finally {

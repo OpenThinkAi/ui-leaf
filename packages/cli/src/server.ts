@@ -374,10 +374,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
       if (method === "POST" && path === "/heartbeat") {
         if (!checkAuth(req, token)) {
-          return new Response(JSON.stringify({ error: "unauthorized" }), {
-            status: 401,
-            headers: { ...headers, "Content-Type": "application/json" },
-          });
+          return new Response("", { status: 401, headers });
         }
         lastHeartbeatAt = Date.now();
         if (connectionState === "disconnected") {
@@ -391,10 +388,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
       if (method === "POST" && path === "/mutate") {
         if (!checkAuth(req, token)) {
-          return new Response(JSON.stringify({ error: "unauthorized" }), {
-            status: 401,
-            headers: { ...headers, "Content-Type": "application/json" },
-          });
+          return new Response("", { status: 401, headers });
         }
         return handleMutate(req, mutations, headers);
       }
@@ -407,10 +401,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
           });
         }
         if (!checkAuth(req, token)) {
-          return new Response(JSON.stringify({ error: "unauthorized" }), {
-            status: 401,
-            headers: { ...headers, "Content-Type": "application/json" },
-          });
+          return new Response("", { status: 401, headers });
         }
         return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
           status: 200,
@@ -491,20 +482,25 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
     }, _heartbeatCheckIntervalMs);
 
+    // The URL passed to the browser includes the token as a hash fragment so it
+    // is never sent to the server (browsers strip fragments before HTTP requests).
+    // The public `url` returned to consumers stays fragment-free.
+    const openUrl = `${url}/#token=${token}`;
+
     // Browser-open implementation, or the test-seam override if one was supplied.
     const doOpen: () => Promise<void> = _opener
-      ? () => _opener(url)
+      ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
-            const launched = await openInAppMode(url);
+            const launched = await openInAppMode(openUrl);
             if (!launched) {
               process.stderr.write(
                 `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
               );
-              await open(url);
+              await open(openUrl);
             }
           } else {
-            await open(url);
+            await open(openUrl);
           }
         };
 
@@ -567,11 +563,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   }
 }
 
+// Custom header (not Authorization: Bearer) so any cross-origin fetch triggers
+// a CORS preflight, which browsers block for non-same-origin callers without
+// an explicit CORS allow list. This closes the simple-form-POST / no-preflight
+// attack vector against the localhost dev server.
 function checkAuth(req: Request, token: string): boolean {
-  const header = req.headers.get("authorization") ?? "";
-  const match = /^Bearer (.+)$/.exec(header);
-  if (!match) return false;
-  return timingSafeEqual(match[1]!, token);
+  const value = req.headers.get("x-ui-leaf-token") ?? "";
+  if (!value) return false;
+  return timingSafeEqual(value, token);
 }
 
 async function handleMutate(
