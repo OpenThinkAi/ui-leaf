@@ -26,9 +26,9 @@ import { mount, type MountOptions } from "./index.js";
 
 // Capture the real stdout write BEFORE anything (especially mount() with
 // silent: true) gets a chance to redirect process.stdout. The binary's
-// protocol output uses this directly; rsbuild's noise (which goes
-// through process.stdout.write) gets redirected to stderr by silent mode
-// without affecting our protocol channel.
+// protocol output uses this directly; bundler / dev-server noise (which
+// goes through process.stdout.write) gets redirected to stderr by silent
+// mode without affecting our protocol channel.
 const realStdoutWrite = process.stdout.write.bind(process.stdout);
 
 const args = process.argv.slice(2);
@@ -237,7 +237,7 @@ async function runMount(): Promise<void> {
     csp: config.csp,
     heartbeatTimeoutMs: config.heartbeatTimeoutMs,
     startupGraceMs: config.startupGraceMs,
-    silent: true, // bridge owns stdout; rsbuild output must stay silent
+    silent: true, // bridge owns stdout; bundler / dev-server output must stay silent
   };
 
   try {
