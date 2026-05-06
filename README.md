@@ -107,7 +107,7 @@ await mount({
   csp,                                       // optional, default: "off" (see Hardening)
   silent,                                    // optional, default: false (see Programmatic use)
   signal,                                    // optional AbortSignal
-  heartbeatTimeoutMs,                        // optional, default: 75000
+  heartbeatTimeoutMs,                        // optional, default: 5000
   startupGraceMs,                            // optional, default: 30000
 });
 ```
@@ -309,7 +309,7 @@ Each pending mutation has a unique `id`. Multiple mutations can be in flight con
 
 - **Pass `viewsRoot` as an absolute path.** No `cwd/views` default games when invoked from another process.
 - **Pass `port: 0`.** ui-leaf asks the OS for a free port and reports it back in the `ready` event. Lets you run concurrent views without collision.
-- **Lower `heartbeatTimeoutMs`** (e.g. 5000) to get faster `disconnected` events. Note that heartbeat timeout no longer terminates the mount — the mount only terminates on an explicit `{type:"close"}` message, stdin close, or signal. If you want fast shutdown on tab close, listen for `disconnected` and send `{type:"close"}` on stdin.
+- **Tune `heartbeatTimeoutMs`** if the 5000ms default doesn't fit your loop: lower it (e.g. 1000) for sub-second `disconnected` detection, raise it for sessions where the page may legitimately pause (devtools paused on a breakpoint, machine sleep, long background-tab throttling). Note that heartbeat timeout no longer terminates the mount — the mount only terminates on an explicit `{type:"close"}` message, stdin close, or signal. If you want fast shutdown on tab close, listen for `disconnected` and send `{type:"close"}` on stdin.
 - **Kill the child on parent shutdown** rather than relying on heartbeat — `kill <pid>` from the parent, or close stdin (which triggers a `caller` close).
 - **Declare every mutation name** the view will call in the `mutations: []` array. The binary only routes mutations whose names appear in the list; calls to undeclared names get a 404 from `/mutate` with the standard "no mutation handler registered for X" error, and the view's `mutate()` promise rejects.
 
