@@ -442,7 +442,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
     // Auto-bump: if bunPort is busy, try bunPort+1 … up to MAX_PORT_ATTEMPTS.
     // port: 0 goes straight to Bun (OS assigns a free port; never EADDRINUSE).
-    // The error handler routes Bun-level socket errors through cleanup("error").
+    // The Bun error callback fires for socket errors AND for unhandled throws in
+    // the fetch handler. Either case routes through cleanup("error") so the mount
+    // terminates cleanly rather than hanging. This means a single buggy request
+    // handler is fatal — intentional: unhandled errors indicate broken invariants.
     const serverErrorHandler = (_err: Error): Response => {
       void cleanup("error");
       return new Response(JSON.stringify({ error: "internal server error" }), {

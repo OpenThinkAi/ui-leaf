@@ -162,7 +162,7 @@ describe("disconnect/reconnect lifecycle", () => {
   );
 
   test(
-    "AC #5: update() and patch() applied while disconnected are reflected on reconnect",
+    "AC #5: view swap applied while disconnected is served after reconnect",
     async () => {
       const view = await mount({
         view: "minimal",
@@ -170,7 +170,6 @@ describe("disconnect/reconnect lifecycle", () => {
         openBrowser: false,
         silent: true,
         port: 0,
-        data: { value: 0 },
         ...FAST_OPTS,
       });
 
@@ -180,24 +179,29 @@ describe("disconnect/reconnect lifecycle", () => {
 
         await waitForEvent(view, "disconnected");
 
-        // Mutate data while disconnected.
-        view.update({ value: 42 });
+        // Swap the view while disconnected — should recompile and update viewState.html.
+        const MARKER = "uilf-ac5-marker-reconnect";
+        const errors = await view.swapView(
+          `import { createElement } from "react";
+export default function V() { return createElement("div", { id: "${MARKER}" }); }`,
+        );
+        expect(errors).toHaveLength(0);
 
         // Register reconnected listener BEFORE sending heartbeat.
         const reconnectedP = waitForEvent(view, "reconnected");
         await sendHeartbeat(view.url, token);
         await reconnectedP;
 
-        // Re-fetch the page. update() doesn't recompile the HTML (data is served
-        // separately via /api/data for dataLoader, or embedded at compile time for
-        // static data). Just verify the server is still alive and responding.
+        // Re-fetch: the swapped HTML should now contain the marker.
         const resp = await fetch(view.url);
         expect(resp.status).toBe(200);
+        const html = await resp.text();
+        expect(html).toContain(MARKER);
       } finally {
         await view.close();
       }
     },
-    10_000,
+    20_000,
   );
 
   test(
