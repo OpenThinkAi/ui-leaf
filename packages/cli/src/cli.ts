@@ -1,19 +1,28 @@
 #!/usr/bin/env node
 // ui-leaf CLI — language-neutral entry point for non-Node consumers.
 //
-// Protocol (stdio, line-delimited JSON):
+// Protocol (stdio, line-delimited JSON; every message carries
+// `"version":"1"` as the first key):
 //
 //   STDIN
-//     Line 1: config object (view, viewsRoot, data, mutations: [names], …)
+//     Line 1: config object {"version":"1","view":…,"viewsRoot":…,…}
 //     Line 2+: mutation responses, one per line:
-//       {"type":"result","id":<n>,"value":<any>}
-//       {"type":"error","id":<n>,"message":"<text>"}
+//       {"version":"1","type":"result","id":<n>,"value":<any>}
+//       {"version":"1","type":"error","id":<n>,"message":"<text>"}
 //
 //   STDOUT
-//     {"type":"ready","url":"<url>","port":<n>}        emitted once when the dev server is up
-//     {"type":"mutate","id":<n>,"name":"<s>","args":<any>}  emitted when a view triggers a mutation
-//     {"type":"closed"}                                 emitted on natural close
-//     {"type":"error","message":"<text>"}              emitted on internal error
+//     {"version":"1","type":"ready","url":"<url>","port":<n>}
+//     {"version":"1","type":"mutate","id":<n>,"name":"<s>","args":<any>}
+//     {"version":"1","type":"closed"}
+//     {"version":"1","type":"error","message":"<text>"}
+//
+//   Version handling
+//     A missing version field on any inbound message produces
+//       {"version":"1","type":"error","message":"missing version field"}
+//     A non-"1" version produces
+//       {"version":"1","type":"error","message":"unsupported protocol version: <x>"}
+//     Both errors on the config message exit 1; on subsequent messages
+//     the bad line is dropped and the mount keeps running.
 //
 //   Lifecycle
 //     Exits 0 on natural close (view closed).
@@ -23,6 +32,13 @@
 
 import { createInterface } from "node:readline";
 import { mount, type MountOptions } from "./index.js";
+import {
+  emit as serializeEvent,
+  parseInbound,
+  type InboundConfig,
+  type InboundMutateResponse,
+  type OutboundEvent,
+} from "./ipc.js";
 
 // Capture the real stdout write BEFORE anything (especially mount() with
 // silent: true) gets a chance to redirect process.stdout. The binary's
@@ -100,36 +116,16 @@ try {
   process.exit(1);
 }
 
-interface ConfigRequest {
-  view: string;
-  viewsRoot: string;
-  data?: unknown;
-  mutations?: string[];
-  title?: string;
-  port?: number;
-  openBrowser?: boolean;
-  shell?: "tab" | "app";
-  csp?: string;
-  heartbeatTimeoutMs?: number;
-  startupGraceMs?: number;
+type ConfigRequest = InboundConfig;
+type MutateResponse = InboundMutateResponse;
+
+function emit(event: OutboundEvent): void {
+  realStdoutWrite(serializeEvent(event));
 }
 
-interface MutateResult {
-  type: "result";
-  id: number;
-  value?: unknown;
-}
-
-interface MutateError {
-  type: "error";
-  id: number;
-  message: string;
-}
-
-type MutateResponse = MutateResult | MutateError;
-
-function emit(event: unknown): void {
-  realStdoutWrite(`${JSON.stringify(event)}\n`);
+function stringifyVersion(got: unknown): string {
+  if (typeof got === "string") return got;
+  return JSON.stringify(got);
 }
 
 async function runMount(): Promise<void> {
@@ -160,27 +156,47 @@ async function runMount(): Promise<void> {
 
     if (!configReceived) {
       configReceived = true;
-      try {
-        const config = JSON.parse(trimmed) as ConfigRequest;
-        configResolve(config);
-      } catch (err) {
-        emit({
-          type: "error",
-          message: `failed to parse config JSON: ${err instanceof Error ? err.message : String(err)}`,
-        });
+      const outcome = parseInbound<ConfigRequest>(trimmed);
+      if (!outcome.ok) {
+        // Config is the load-bearing first message. A bad version on the
+        // config can't be recovered from, so per AC #5's optional clause
+        // we emit the spec'd error and exit. Subsequent (post-config)
+        // version violations are non-fatal — see below.
+        if (outcome.kind === "json") {
+          emit({
+            type: "error",
+            message: `failed to parse config JSON: ${outcome.reason}`,
+          });
+        } else if (outcome.kind === "missing-version") {
+          emit({ type: "error", message: "missing version field" });
+        } else {
+          emit({
+            type: "error",
+            message: `unsupported protocol version: ${stringifyVersion(outcome.got)}`,
+          });
+        }
         process.exit(1);
       }
+      configResolve(outcome.msg);
       return;
     }
 
     // Mutation response.
-    let msg: MutateResponse;
-    try {
-      msg = JSON.parse(trimmed) as MutateResponse;
-    } catch {
-      // Malformed line; ignore (consumer should be using the protocol).
+    const outcome = parseInbound<MutateResponse>(trimmed);
+    if (!outcome.ok) {
+      if (outcome.kind === "missing-version") {
+        emit({ type: "error", message: "missing version field" });
+      } else if (outcome.kind === "unsupported-version") {
+        emit({
+          type: "error",
+          message: `unsupported protocol version: ${stringifyVersion(outcome.got)}`,
+        });
+      }
+      // Malformed JSON falls through silently (matches prior behaviour —
+      // a non-JSON line never had an `id` to correlate with anyway).
       return;
     }
+    const msg = outcome.msg;
     const p = pending.get(msg.id);
     if (!p) return;
     pending.delete(msg.id);
