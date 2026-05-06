@@ -435,6 +435,10 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
 `,
   );
 
+  // Double-stringify encodes data as a JS string literal so the inline
+  // assignment uses JSON.parse(…) at load time rather than an object literal.
+  // This sidesteps ECMAScript Annex B.3.1, which lets a `__proto__` key in
+  // an object literal mutate the prototype — JSON.parse has no such carve-out.
   const dataInline = escapeForScriptTag(JSON.stringify(JSON.stringify(data)));
   const tokenInline = JSON.stringify(token);
   const titleEscaped = title
