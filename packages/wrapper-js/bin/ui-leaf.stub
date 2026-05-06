@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+// Stub shipped in the npm tarball. postinstall overwrites this with the real
+// platform binary. If you're seeing this error, postinstall didn't run or failed.
+console.error(
+  "ui-leaf: binary not installed. To fix:\n" +
+    "  • Re-run postinstall: npm rebuild @openthink/ui-leaf-wrapper\n" +
+    "  • Or point at a local binary: UI_LEAF_BINARY_PATH=/path/to/ui-leaf npm install"
+);
+process.exit(1);
