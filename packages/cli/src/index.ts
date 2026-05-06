@@ -5,11 +5,14 @@ import { resolve } from "node:path";
 import {
   startDevServer,
   type CspOption,
+  type DevServerEvent,
+  type DevServerEventListener,
   type MutationHandler,
   type Shell,
 } from "./server.js";
+import type { BuildError } from "./compile.js";
 
-export type { CspOption, MutationHandler, Shell };
+export type { BuildError, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
 
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
@@ -185,6 +188,31 @@ export interface MountedView {
   closed: Promise<void>;
   /** Force-close the dev server early. */
   close: () => Promise<void>;
+  /**
+   * Replace in-memory data and emit a `data-updated` event (picked up by the
+   * AGT-126 SSE channel). Preserves in-page React state — no recompile.
+   */
+  update: (data: unknown) => void;
+  /**
+   * Swap the view source on the fly. Triggers a recompile; on success replaces
+   * the served HTML and emits `view-swapped` (browser reloads). On compile
+   * failure the previous HTML is preserved. Returns compile errors if any.
+   */
+  swapView: (source: string) => Promise<BuildError[]>;
+  /**
+   * Atomically replace both data and view source. If compilation fails neither
+   * takes effect. Returns compile errors if any.
+   */
+  patch: (data: unknown, source: string) => Promise<BuildError[]>;
+  /**
+   * Re-invoke open(url) to launch a fresh browser tab at the same URL.
+   * Always opens — if a tab is already connected, a duplicate opens.
+   */
+  reopen: () => Promise<void>;
+  /** Subscribe to a server-side event (data-updated | view-swapped). */
+  on: (event: DevServerEvent, listener: DevServerEventListener) => void;
+  /** Unsubscribe a previously-registered listener. */
+  off: (event: DevServerEvent, listener: DevServerEventListener) => void;
 }
 
 /**
@@ -265,5 +293,11 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     port: server.port,
     closed,
     close: server.close,
+    update: server.update.bind(server),
+    swapView: (source: string) => server.swapView(source),
+    patch: (data: unknown, source: string) => server.patch(data, source),
+    reopen: server.reopen.bind(server),
+    on: server.on.bind(server),
+    off: server.off.bind(server),
   };
 }

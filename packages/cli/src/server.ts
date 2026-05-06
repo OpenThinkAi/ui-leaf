@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import open, { apps } from "open";
-import { compileView } from "./compile.js";
+import { compileView, compileSource } from "./compile.js";
 
 // Module-level stdout redirect state. Captured ONCE at module load so
 // concurrent silent: true mounts share the same "original" reference and
@@ -181,12 +181,48 @@ export interface DevServerOptions {
   silent?: boolean;
 }
 
+export type DevServerEvent = "data-updated" | "view-swapped";
+export type DevServerEventListener = () => void;
+
 export interface DevServer {
   url: string;
   port: number;
   /** Resolves when the view is closed (heartbeat timeout) or close() is called. */
   closed: Promise<void>;
   close: () => Promise<void>;
+  /**
+   * Replace in-memory data and emit a `data-updated` event.
+   * The browser fetches fresh data via GET /api/data (AGT-126 SSE channel).
+   */
+  update: (data: unknown) => void;
+  /**
+   * Recompile the view from an inline TSX source string and replace the
+   * in-memory HTML. Emits `view-swapped` on success; emits an `error` on
+   * stdout and preserves the previous HTML on compile failure.
+   * Returns errors array (empty = success).
+   */
+  swapView: (source: string, opts?: { title?: string; csp?: string; token?: string }) => Promise<import("./compile.js").BuildError[]>;
+  /**
+   * Atomically replace both data and view source. If compilation fails,
+   * neither takes effect. Returns errors array (empty = success).
+   */
+  patch: (data: unknown, source: string, opts?: { title?: string; csp?: string; token?: string }) => Promise<import("./compile.js").BuildError[]>;
+  /**
+   * Re-invoke open(url) to launch a fresh browser tab at the same URL.
+   * Always opens (duplicates if a tab is already connected).
+   * `reconnected` event after tab connects is AGT-125's responsibility.
+   */
+  reopen: () => Promise<void>;
+  /**
+   * Subscribe to a server-side event. Listeners are called synchronously
+   * after each mutation completes. This is the public contract for AGT-126.
+   *
+   * Events:
+   *   "data-updated" — fired by update() and patch()
+   *   "view-swapped"  — fired by swapView() and patch()
+   */
+  on: (event: DevServerEvent, listener: DevServerEventListener) => void;
+  off: (event: DevServerEvent, listener: DevServerEventListener) => void;
 }
 
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
@@ -255,7 +291,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       throw new Error(`ui-leaf: view compilation failed: ${msg}`);
     }
 
-    const html = result.html;
+    // Mutable view state: the / handler reads from this on every request.
+    // update(), swapView(), patch() mutate it in place. Stdin is a serial
+    // line stream so no extra locking primitive is needed.
+    const viewState = { html: result.html, data: dataLoader ? loadedData : data };
+
+    // Minimal event broker — the public contract for AGT-126's SSE channel.
+    const listeners = new Map<DevServerEvent, Set<DevServerEventListener>>([
+      ["data-updated", new Set()],
+      ["view-swapped", new Set()],
+    ]);
+    function fireEvent(event: DevServerEvent): void {
+      for (const fn of listeners.get(event) ?? []) fn();
+    }
 
     let lastHeartbeatAt = Date.now();
     let closeRequested = false;
@@ -298,7 +346,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         const method = req.method;
 
         if (method === "GET" && path === "/") {
-          return new Response(html, {
+          return new Response(viewState.html, {
             status: 200,
             headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
           });
@@ -338,7 +386,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
               headers: { ...headers, "Content-Type": "application/json" },
             });
           }
-          return new Response(JSON.stringify(loadedData !== undefined ? loadedData : null), {
+          return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
             status: 200,
             headers: { ...headers, "Content-Type": "application/json" },
           });
@@ -394,7 +442,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
     }, 1000);
 
-    if (openBrowser) {
+    // Capture the opener function so reopen() can call it later.
+    async function invokeBrowserOpen(): Promise<void> {
       if (shell === "app") {
         const launched = await openInAppMode(url);
         if (!launched) {
@@ -408,11 +457,65 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
     }
 
+    if (openBrowser) {
+      await invokeBrowserOpen();
+    }
+
     return {
       url,
       port: actualPort,
       closed,
       close: cleanup,
+      on(event: DevServerEvent, listener: DevServerEventListener): void {
+        listeners.get(event)?.add(listener);
+      },
+      off(event: DevServerEvent, listener: DevServerEventListener): void {
+        listeners.get(event)?.delete(listener);
+      },
+      update(newData: unknown): void {
+        viewState.data = newData;
+        fireEvent("data-updated");
+      },
+      async swapView(
+        source: string,
+        swapOpts?: { title?: string; csp?: string; token?: string },
+      ): Promise<import("./compile.js").BuildError[]> {
+        const r = await compileSource({
+          source,
+          data: viewState.data,
+          title: swapOpts?.title ?? title,
+          csp: swapOpts?.csp ?? (cspHeader ?? undefined),
+          token: swapOpts?.token ?? token,
+        });
+        if (r.errors.length > 0) return r.errors;
+        viewState.html = r.html;
+        fireEvent("view-swapped");
+        return [];
+      },
+      async patch(
+        newData: unknown,
+        source: string,
+        patchOpts?: { title?: string; csp?: string; token?: string },
+      ): Promise<import("./compile.js").BuildError[]> {
+        // Compile first with newData so the HTML embeds the incoming data.
+        const r = await compileSource({
+          source,
+          data: newData,
+          title: patchOpts?.title ?? title,
+          csp: patchOpts?.csp ?? (cspHeader ?? undefined),
+          token: patchOpts?.token ?? token,
+        });
+        if (r.errors.length > 0) return r.errors;
+        // Only mutate state on compile success (atomicity guarantee).
+        viewState.data = newData;
+        viewState.html = r.html;
+        fireEvent("data-updated");
+        fireEvent("view-swapped");
+        return [];
+      },
+      async reopen(): Promise<void> {
+        await invokeBrowserOpen();
+      },
     };
   } catch (err) {
     restoreStdout?.();
