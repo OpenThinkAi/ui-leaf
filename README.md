@@ -78,7 +78,11 @@ Three reasons:
 
 ## How it works
 
-`mount()` compiles your view file once with `Bun.build`, injects data into `window.__UI_LEAF__`, starts a `Bun.serve` HTTP server, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered. Browser tab close → heartbeat stops → server shuts down → `view.closed` resolves and your CLI continues.
+`mount()` compiles your view file once with `Bun.build`, injects data into `window.__UI_LEAF__`, starts a `Bun.serve` HTTP server, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered.
+
+**Heartbeat and lifecycle.** The browser tab sends periodic heartbeats while the page is open. When heartbeats stop (tab closed or navigated away), `mount()` emits a `disconnected` event but the server stays running — the port, token, and in-memory data are all preserved. When a tab reconnects (heartbeat resumes), a `reconnected` event fires. Any data updates or view swaps that arrive during the disconnected window take effect on the next load. The mount terminates only on an explicit caller close (`view.close()` or the inbound `{type:"close"}` message), a signal (SIGINT/SIGTERM), or an internal error — and `view.closed` resolves to the reason (`"caller"`, `"signal"`, or `"error"`).
+
+Multi-tab note: `disconnected` fires only when **all** open tabs go silent — the heartbeat is a single high-water mark across tabs, so closing one tab while another is open emits no event.
 
 The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, served inline in the compiled HTML — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch `GET /`, grep the token out, and call `/mutate` or `/api/data` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
 
@@ -237,12 +241,22 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
     {"type":"result","id":1,"value":{"ok":true}}
     {"type":"error","id":2,"message":"…"}
     ```
+  - **Or live-update / control messages:**
+    ```json
+    {"version":"1","type":"update","data":{}}
+    {"version":"1","type":"view","source":"<tsx>"}
+    {"version":"1","type":"patch","data":{},"view":{"source":"<tsx>"}}
+    {"version":"1","type":"reopen"}
+    {"version":"1","type":"close"}
+    ```
 - **stdout (line-delimited JSON):**
   - `{"type":"ready","url":"http://127.0.0.1:54321","port":54321}` — emitted once when the dev server is up
   - `{"type":"mutate","id":1,"name":"refresh","args":{}}` — emitted when a view triggers a mutation; respond on stdin
-  - `{"type":"closed"}` — emitted on natural close (browser tab closed, heartbeat timeout)
+  - `{"type":"disconnected"}` — browser tab stopped heartbeating; mount stays alive
+  - `{"type":"reconnected"}` — browser reconnected after a disconnect
+  - `{"type":"closed","reason":"caller"}` — mount terminated; reason is `caller` | `signal` | `error`
   - `{"type":"error","message":"…"}` — emitted on internal failure
-- **Lifecycle:** binary exits 0 on natural close, 1 on internal error; closing stdin from the parent triggers shutdown.
+- **Lifecycle:** binary exits 0 on `closed`, 1 on internal error. The mount does **not** auto-terminate when the browser disconnects — only an explicit `{type:"close"}` message, stdin close, SIGINT/SIGTERM, or internal error terminates it. Closing stdin from the parent triggers a `caller` close.
 
 ### Minimal Bash example (read-only view, no mutations)
 
@@ -250,8 +264,10 @@ What the consumer CLI is responsible for (out of ui-leaf's scope):
 CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
 echo "$CONFIG" | ui-leaf mount
 # → {"type":"ready","url":"http://127.0.0.1:54321","port":54321}
-# (browser opens; user closes tab)
-# → {"type":"closed"}
+# (browser opens; user closes tab → disconnected; mount stays running)
+# → {"type":"disconnected"}
+# (send {"type":"close"} on stdin to terminate)
+# → {"type":"closed","reason":"caller"}
 ```
 
 ### Worked example with mutations
@@ -273,10 +289,18 @@ Child → parent stdout:
 Parent → child stdin (after handling the mutation):
   {"type":"result","id":1,"value":{"count":1}}
 
-(user closes tab)
+(user closes tab → mount stays running)
 
 Child → parent stdout:
-  {"type":"closed"}
+  {"type":"disconnected"}
+
+(parent decides to shut down)
+
+Parent → child stdin:
+  {"type":"close"}
+
+Child → parent stdout:
+  {"type":"closed","reason":"caller"}
 ```
 
 Each pending mutation has a unique `id`. Multiple mutations can be in flight concurrently — match `result`/`error` responses by id.
@@ -285,8 +309,8 @@ Each pending mutation has a unique `id`. Multiple mutations can be in flight con
 
 - **Pass `viewsRoot` as an absolute path.** No `cwd/views` default games when invoked from another process.
 - **Pass `port: 0`.** ui-leaf asks the OS for a free port and reports it back in the `ready` event. Lets you run concurrent views without collision.
-- **Lower `heartbeatTimeoutMs`** (e.g. 5000) so orphaned ui-leaf children exit fast if your parent process dies. The default 75000 is tuned for human-direct use (survives one browser background-tab throttle) and is too long when a parent process is supervising.
-- **Kill the child on parent shutdown** rather than relying on heartbeat — `kill <pid>` from the parent. Closing stdin also triggers a clean shutdown.
+- **Lower `heartbeatTimeoutMs`** (e.g. 5000) to get faster `disconnected` events. Note that heartbeat timeout no longer terminates the mount — the mount only terminates on an explicit `{type:"close"}` message, stdin close, or signal. If you want fast shutdown on tab close, listen for `disconnected` and send `{type:"close"}` on stdin.
+- **Kill the child on parent shutdown** rather than relying on heartbeat — `kill <pid>` from the parent, or close stdin (which triggers a `caller` close).
 - **Declare every mutation name** the view will call in the `mutations: []` array. The binary only routes mutations whose names appear in the list; calls to undeclared names get a 404 from `/mutate` with the standard "no mutation handler registered for X" error, and the view's `mutate()` promise rejects.
 
 ### Driving from Node via `mount()` directly

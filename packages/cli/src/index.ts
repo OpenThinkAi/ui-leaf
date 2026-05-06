@@ -4,6 +4,7 @@
 import { resolve } from "node:path";
 import {
   startDevServer,
+  type CloseReason,
   type CspOption,
   type DevServerEvent,
   type DevServerEventListener,
@@ -12,7 +13,7 @@ import {
 } from "./server.js";
 import type { BuildError } from "./compile.js";
 
-export type { BuildError, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
+export type { BuildError, CloseReason, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
 
 export interface MountOptions {
   /** View name. Resolves to <viewsRoot>/<view>.tsx. */
@@ -107,12 +108,12 @@ export interface MountOptions {
    */
   signal?: AbortSignal;
   /**
-   * Browser silence (ms) that triggers shutdown after the startup grace
-   * window. Defaults to 75000 — chosen to survive a single browser
-   * background-tab throttle (browsers clamp setInterval in hidden tabs to
-   * roughly once per minute). Lower it if you want faster shutdown on tab
-   * close; raise it if your debugger pauses the page or your machine
-   * sleeps mid-session.
+   * Browser silence (ms) after which the mount emits `disconnected`.
+   * Defaults to 75000 — chosen to survive a single browser background-tab
+   * throttle (browsers clamp setInterval to ~60s in hidden tabs). Lower it
+   * for faster `disconnected` detection; raise it for sessions where the
+   * page may pause (debugger, machine sleep). Note: this no longer controls
+   * when the mount terminates — only when the `disconnected` event fires.
    */
   heartbeatTimeoutMs?: number;
   /**
@@ -172,11 +173,13 @@ export interface MountOptions {
    * Grace period (ms) after server start before the heartbeat watcher arms.
    * Cold-loading clients sometimes take a few seconds to send their first
    * heartbeat. Defaults to 30000.
-   *
-   * If no client connects within (startupGraceMs + heartbeatTimeoutMs),
-   * the server shuts down on its own.
    */
   startupGraceMs?: number;
+  /**
+   * Test seam: heartbeat watcher tick interval (ms). Defaults to 1000.
+   * Never set this in production.
+   */
+  _heartbeatCheckIntervalMs?: number;
 }
 
 export interface MountedView {
@@ -184,8 +187,8 @@ export interface MountedView {
   url: string;
   /** Bound port. Useful when port: 0 was requested. */
   port: number;
-  /** Resolves when the view closes (heartbeat timeout) or close() is called. */
-  closed: Promise<void>;
+  /** Resolves with the close reason when the mount terminates. */
+  closed: Promise<CloseReason>;
   /** Force-close the dev server early. */
   close: () => Promise<void>;
   /**
@@ -218,16 +221,21 @@ export interface MountedView {
 /**
  * Mount a customizable browser view from a CLI. Spins up a local dev server
  * and renders the chosen view with the given data. Returns once the server
- * is ready; await `result.closed` to block until the user closes the
- * browser tab.
+ * is ready; await `result.closed` to block until the mount terminates.
  *
  * Mutations triggered in the view are dispatched to the registered handlers
  * here; the view never reaches the CLI's backing API directly.
  *
- * Multi-tab note: if the user opens the served URL in additional tabs (or
- * duplicates the tab), each tab heartbeats independently and the server
- * stays alive while *any* tab is open. Closing the original tab does not
- * shut down the CLI if a duplicate is still loaded.
+ * **Lifecycle.** Browser tab close (heartbeat silence) emits a `disconnected`
+ * event on `result` but does NOT resolve `closed` or stop the server. The
+ * mount only terminates — and `closed` resolves — when you call
+ * `result.close()`, receive SIGINT/SIGTERM, or an internal error occurs.
+ * Listen for `disconnected` and call `result.close()` yourself if you want
+ * fast shutdown on tab close.
+ *
+ * **Multi-tab note.** The heartbeat is a single high-water mark across all
+ * open tabs; `disconnected` fires only when all tabs go silent. Closing one
+ * tab while another is open emits no event.
  *
  * Ctrl+C: this function installs SIGINT and SIGTERM handlers that close
  * the server before exiting.
@@ -250,11 +258,12 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     csp: opts.csp,
     allowedHosts: opts.allowedHosts,
     silent: opts.silent,
+    _heartbeatCheckIntervalMs: opts._heartbeatCheckIntervalMs,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {
     void (async () => {
-      await server.close();
+      await server.close("signal");
       // Re-raise so default exit codes still apply.
       process.kill(process.pid, signal);
     })();
@@ -272,8 +281,8 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
       return {
         url: server.url,
         port: server.port,
-        closed: Promise.resolve(),
-        close: server.close,
+        closed: Promise.resolve<CloseReason>("caller"),
+        close: () => server.close(),
         update: server.update.bind(server),
         swapView: (source: string) => server.swapView(source),
         patch: (data: unknown, source: string) => server.patch(data, source),
@@ -298,7 +307,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     url: server.url,
     port: server.port,
     closed,
-    close: server.close,
+    close: () => server.close(),
     update: server.update.bind(server),
     swapView: (source: string) => server.swapView(source),
     patch: (data: unknown, source: string) => server.patch(data, source),
