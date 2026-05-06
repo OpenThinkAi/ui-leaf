@@ -130,6 +130,12 @@ export type InboundClose = {
   type: "close";
 };
 
+/** Caller heartbeat. The binary silently acknowledges; no reply is emitted. */
+export type InboundPing = {
+  version: ProtocolVersion;
+  type: "ping";
+};
+
 /**
  * Discriminated union of all valid post-config inbound messages. Discriminate
  * on `type`; mutation responses are identified by the presence of an `id` field.
@@ -140,7 +146,8 @@ export type Inbound =
   | InboundView
   | InboundPatch
   | InboundReopen
-  | InboundClose;
+  | InboundClose
+  | InboundPing;
 
 // `Omit<U, K>` collapses a discriminated union by intersecting the
 // remaining keys; the distributive form preserves the variants so the
@@ -170,6 +177,128 @@ export type ParseOutcome<T> =
   | { ok: false; kind: "json"; reason: string }
   | { ok: false; kind: "missing-version" }
   | { ok: false; kind: "unsupported-version"; got: unknown };
+
+export type ValidateOutcome = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Structural validator for inbound messages. Called after parseInbound() confirms
+ * version and JSON shape; this function checks per-type required fields.
+ *
+ * kind="config"      → validates InboundConfig required fields (view, viewsRoot).
+ * kind="post-config" → validates InboundMessage variants by type discriminant.
+ *
+ * On failure the caller should emit {type:"error",message:reason} and continue
+ * (or exit 1 for config failures, per the protocol spec).
+ */
+export function validateInboundShape(
+  msg: unknown,
+  kind: "config" | "post-config",
+): ValidateOutcome {
+  if (typeof msg !== "object" || msg === null) {
+    return { ok: false, reason: "message is not an object" };
+  }
+  const m = msg as Record<string, unknown>;
+
+  if (kind === "config") {
+    if (typeof m.view !== "string" || m.view === "") {
+      return { ok: false, reason: 'config requires a non-empty string "view"' };
+    }
+    if (typeof m.viewsRoot !== "string" || m.viewsRoot === "") {
+      return { ok: false, reason: 'config requires a non-empty string "viewsRoot"' };
+    }
+    if ("mutations" in m && m.mutations !== undefined) {
+      if (
+        !Array.isArray(m.mutations) ||
+        !(m.mutations as unknown[]).every((x) => typeof x === "string")
+      ) {
+        return { ok: false, reason: "config.mutations must be an array of strings" };
+      }
+    }
+    if ("port" in m && m.port !== undefined && typeof m.port !== "number") {
+      return { ok: false, reason: "config.port must be a number" };
+    }
+    if (
+      "openBrowser" in m &&
+      m.openBrowser !== undefined &&
+      typeof m.openBrowser !== "boolean"
+    ) {
+      return { ok: false, reason: "config.openBrowser must be a boolean" };
+    }
+    if (
+      "shell" in m &&
+      m.shell !== undefined &&
+      m.shell !== "tab" &&
+      m.shell !== "app"
+    ) {
+      return { ok: false, reason: 'config.shell must be "tab" or "app"' };
+    }
+    if (
+      "heartbeatTimeoutMs" in m &&
+      m.heartbeatTimeoutMs !== undefined &&
+      typeof m.heartbeatTimeoutMs !== "number"
+    ) {
+      return { ok: false, reason: "config.heartbeatTimeoutMs must be a number" };
+    }
+    if (
+      "startupGraceMs" in m &&
+      m.startupGraceMs !== undefined &&
+      typeof m.startupGraceMs !== "number"
+    ) {
+      return { ok: false, reason: "config.startupGraceMs must be a number" };
+    }
+    return { ok: true };
+  }
+
+  // post-config: discriminate on type first for result/error (which also carry id),
+  // then on type alone for live-update commands.
+  const type = m.type;
+  if (typeof type !== "string") {
+    return { ok: false, reason: '"type" field must be a string' };
+  }
+
+  // Mutation responses: type is "result" or "error", always carry a numeric id.
+  if (type === "result" || type === "error") {
+    if (typeof m.id !== "number") {
+      return { ok: false, reason: `"${type}" requires a numeric "id" field` };
+    }
+    if (type === "error" && typeof m.message !== "string") {
+      return { ok: false, reason: '"error" requires a string "message" field' };
+    }
+    return { ok: true };
+  }
+
+  // Live-update commands.
+  switch (type) {
+    case "update":
+      if (!Object.hasOwn(m, "data")) {
+        return { ok: false, reason: '"update" requires a "data" field' };
+      }
+      return { ok: true };
+    case "view":
+      if (typeof m.source !== "string") {
+        return { ok: false, reason: '"view" requires a string "source" field' };
+      }
+      return { ok: true };
+    case "patch":
+      if (!Object.hasOwn(m, "data")) {
+        return { ok: false, reason: '"patch" requires a "data" field' };
+      }
+      if (
+        typeof m.view !== "object" ||
+        m.view === null ||
+        typeof (m.view as Record<string, unknown>).source !== "string"
+      ) {
+        return { ok: false, reason: '"patch" requires a string "view.source" field' };
+      }
+      return { ok: true };
+    case "reopen":
+    case "close":
+    case "ping":
+      return { ok: true };
+    default:
+      return { ok: false, reason: `unknown message type: "${type}"` };
+  }
+}
 
 export function parseInbound<T extends { version: ProtocolVersion }>(
   line: string,

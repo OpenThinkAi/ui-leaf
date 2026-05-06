@@ -58,6 +58,7 @@ import { mount, type MountOptions } from "./index.js";
 import {
   emit as serializeEvent,
   parseInbound,
+  validateInboundShape,
   type Inbound,
   type InboundConfig,
   type OutboundEvent,
@@ -199,6 +200,11 @@ async function runMount(): Promise<void> {
         }
         process.exit(1);
       }
+      const configValidation = validateInboundShape(outcome.msg, "config");
+      if (!configValidation.ok) {
+        emit({ type: "error", message: configValidation.reason });
+        process.exit(1);
+      }
       configResolve(outcome.msg);
       return;
     }
@@ -218,6 +224,12 @@ async function runMount(): Promise<void> {
       return;
     }
     const msg = outcome.msg;
+
+    const msgValidation = validateInboundShape(msg, "post-config");
+    if (!msgValidation.ok) {
+      emit({ type: "error", message: msgValidation.reason });
+      return;
+    }
 
     // Mutation responses carry an `id` field — discriminate before checking `type`.
     if ("id" in msg && typeof msg.id === "number") {
@@ -277,8 +289,10 @@ async function runMount(): Promise<void> {
       return;
     }
 
-    // Unknown type — emit error, keep the mount alive.
-    emit({ type: "error", message: `unknown message type: ${(msg as { type: unknown }).type}` });
+    if (msg.type === "ping") {
+      // Heartbeat from caller — silently acknowledged; no reply emitted.
+      return;
+    }
   });
 
   rl.on("close", () => {

@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OpenThinkAi/ui-leaf/packages/cli/schema/ipc.json",
+  "title": "ui-leaf IPC Protocol — v1",
+  "description": "Line-delimited JSON messages exchanged between the ui-leaf binary (stdout) and its caller (stdin). Every message carries version:\"1\". InboundConfig is the first line of stdin; all subsequent lines are InboundMessage.",
+  "$defs": {
+    "Version1": {
+      "description": "Protocol version literal. A new $id hosts future breaking versions.",
+      "type": "string",
+      "const": "1"
+    },
+    "InboundConfig": {
+      "description": "First line of stdin: config object that spawns a mount. No type discriminator; identified by position in the stream.",
+      "type": "object",
+      "required": ["version", "view", "viewsRoot"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "view": {
+          "type": "string",
+          "description": "View name (resolved relative to viewsRoot) or inline TSX source string."
+        },
+        "viewsRoot": {
+          "type": "string",
+          "description": "Absolute path to the directory containing named view files."
+        },
+        "data": {
+          "description": "Initial data object passed to the view component as props (any JSON value)."
+        },
+        "mutations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of mutation handlers the view is allowed to call."
+        },
+        "title": {
+          "type": "string",
+          "description": "Browser tab title."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "TCP port to bind. 0 = OS-assigned."
+        },
+        "openBrowser": {
+          "type": "boolean",
+          "description": "Whether to open a browser tab automatically on startup."
+        },
+        "shell": {
+          "type": "string",
+          "enum": ["tab", "app"],
+          "description": "macOS open-in shell mode."
+        },
+        "csp": {
+          "type": "string",
+          "description": "Content Security Policy preset name or raw policy string."
+        },
+        "heartbeatTimeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Milliseconds before a missing browser heartbeat closes the mount. Default: 5000."
+        },
+        "startupGraceMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Milliseconds to wait for a first browser connection before emitting disconnected."
+        }
+      },
+      "additionalProperties": true
+    },
+    "InboundMutateResult": {
+      "description": "Caller's response to a mutate request: success path. Correlated by id.",
+      "type": "object",
+      "required": ["version", "type", "id"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "result",
+          "description": "Discriminant: successful mutation response."
+        },
+        "id": {
+          "type": "integer",
+          "description": "Mutation request ID echoed back from the OutboundMutate message."
+        },
+        "value": {
+          "description": "Return value from the mutation handler (any JSON value, including undefined/absent for void mutations)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundMutateError": {
+      "description": "Caller's response to a mutate request: error path. Correlated by id.",
+      "type": "object",
+      "required": ["version", "type", "id", "message"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "error",
+          "description": "Discriminant: failed mutation response."
+        },
+        "id": {
+          "type": "integer",
+          "description": "Mutation request ID echoed back from the OutboundMutate message."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error message from the mutation handler."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundUpdate": {
+      "description": "Replace in-memory data and emit a data-updated SSE event to connected browser tabs.",
+      "type": "object",
+      "required": ["version", "type", "data"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "update",
+          "description": "Discriminant: data update."
+        },
+        "data": {
+          "description": "New data object to pass to the view component as props (any JSON value, including null)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundView": {
+      "description": "Swap the view source on-the-fly; triggers a recompile and a view-swapped SSE reload.",
+      "type": "object",
+      "required": ["version", "type", "source"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "view",
+          "description": "Discriminant: view swap."
+        },
+        "source": {
+          "type": "string",
+          "description": "Self-contained TSX source string. Relative imports are not supported; bare-package imports (react, react-dom) work via the internal alias plugin."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundPatch": {
+      "description": "Atomically replace both data and view source. If the compile fails, neither takes effect and the previous state is preserved.",
+      "type": "object",
+      "required": ["version", "type", "data", "view"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "patch",
+          "description": "Discriminant: atomic data + view patch."
+        },
+        "data": {
+          "description": "New data object (any JSON value, including null)."
+        },
+        "view": {
+          "type": "object",
+          "required": ["source"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Self-contained TSX source string."
+            }
+          },
+          "additionalProperties": false,
+          "description": "New view descriptor."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundReopen": {
+      "description": "Re-invoke open(url) to launch a fresh browser tab at the same mount URL.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "reopen",
+          "description": "Discriminant: reopen browser tab."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundClose": {
+      "description": "Terminate the mount cleanly (caller-initiated close). The binary emits OutboundClosed with reason:\"caller\" and exits 0.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "close",
+          "description": "Discriminant: close mount."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundPing": {
+      "description": "Caller heartbeat. The binary silently acknowledges and keeps the mount alive. No reply is emitted.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "ping",
+          "description": "Discriminant: caller heartbeat ping."
+        }
+      },
+      "additionalProperties": false
+    },
+    "InboundMessage": {
+      "description": "Any valid post-config inbound message (lines 2+ of stdin).",
+      "oneOf": [
+        { "$ref": "#/$defs/InboundMutateResult" },
+        { "$ref": "#/$defs/InboundMutateError" },
+        { "$ref": "#/$defs/InboundUpdate" },
+        { "$ref": "#/$defs/InboundView" },
+        { "$ref": "#/$defs/InboundPatch" },
+        { "$ref": "#/$defs/InboundReopen" },
+        { "$ref": "#/$defs/InboundClose" },
+        { "$ref": "#/$defs/InboundPing" }
+      ]
+    },
+    "OutboundReady": {
+      "description": "Emitted once when the HTTP server is listening and the view URL is known. The caller should open a browser at this URL if openBrowser was false.",
+      "type": "object",
+      "required": ["version", "type", "url", "port"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "ready",
+          "description": "Discriminant: server ready."
+        },
+        "url": {
+          "type": "string",
+          "description": "Full URL the view is accessible at, including the auth token fragment."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port the server bound to."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundMutate": {
+      "description": "Emitted when the view invokes a named mutation. The caller must respond with InboundMutateResult or InboundMutateError carrying the same id.",
+      "type": "object",
+      "required": ["version", "type", "id", "name", "args"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "mutate",
+          "description": "Discriminant: mutation request."
+        },
+        "id": {
+          "type": "integer",
+          "description": "Unique per-mount mutation request ID for correlating the response."
+        },
+        "name": {
+          "type": "string",
+          "description": "Mutation handler name as declared in InboundConfig.mutations."
+        },
+        "args": {
+          "description": "Arguments passed to the mutation handler by the view (any JSON value)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundDisconnected": {
+      "description": "Browser tab heartbeat stopped; mount stays alive, waiting for a reconnect.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "disconnected",
+          "description": "Discriminant: browser disconnected."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundReconnected": {
+      "description": "Browser reconnected after a prior disconnected event.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "reconnected",
+          "description": "Discriminant: browser reconnected."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundClosed": {
+      "description": "Mount terminated. The binary exits after emitting this message. Exit code is 0 for caller/signal, 1 for error.",
+      "type": "object",
+      "required": ["version", "type", "reason"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "closed",
+          "description": "Discriminant: mount closed."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["caller", "signal", "error"],
+          "description": "Why the mount closed: caller sent close, OS signal received, or unrecoverable error."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundError": {
+      "description": "Structured error output. Errors without a phase tag are fatal (exit 1); phase:\"build\" errors are non-fatal (previous view preserved).",
+      "type": "object",
+      "required": ["version", "type", "message"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "error",
+          "description": "Discriminant: error."
+        },
+        "phase": {
+          "type": "string",
+          "enum": ["build", "runtime"],
+          "description": "Error phase tag, if applicable. Omitted for general errors."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error message."
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutboundMessage": {
+      "description": "Any valid outbound message (stdout lines emitted by the binary).",
+      "oneOf": [
+        { "$ref": "#/$defs/OutboundReady" },
+        { "$ref": "#/$defs/OutboundMutate" },
+        { "$ref": "#/$defs/OutboundDisconnected" },
+        { "$ref": "#/$defs/OutboundReconnected" },
+        { "$ref": "#/$defs/OutboundClosed" },
+        { "$ref": "#/$defs/OutboundError" }
+      ]
+    }
+  }
+}
