@@ -435,7 +435,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
 `,
   );
 
-  const dataInline = escapeForScriptTag(JSON.stringify(data));
+  const dataInline = escapeForScriptTag(JSON.stringify(JSON.stringify(data)));
   const tokenInline = JSON.stringify(token);
   const titleEscaped = title
     .replace(/&/g, "&amp;")
@@ -449,7 +449,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   <head>
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
-    <script>window.__UI_LEAF__ = { data: ${dataInline}, token: ${tokenInline} };</script>
+    <script>window.__UI_LEAF__ = { data: JSON.parse(${dataInline}), token: ${tokenInline} };</script>
   </head>
   <body>
     <div id="root"></div>
