@@ -56,7 +56,6 @@ import {
   parseInbound,
   type Inbound,
   type InboundConfig,
-  type InboundMutateResponse,
   type OutboundEvent,
 } from "./ipc.js";
 
@@ -221,9 +220,8 @@ async function runMount(): Promise<void> {
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);
-      const mutMsg = msg as InboundMutateResponse;
-      if (mutMsg.type === "result") p.resolve(mutMsg.value);
-      else if (mutMsg.type === "error") p.reject(new Error(mutMsg.message));
+      if (msg.type === "result") p.resolve(msg.value);
+      else if (msg.type === "error") p.reject(new Error(msg.message));
       return;
     }
 

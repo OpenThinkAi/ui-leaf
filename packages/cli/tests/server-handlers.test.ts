@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import { join } from "node:path";
 import { startDevServer, type DevServer } from "../src/server.ts";
 
@@ -164,17 +164,32 @@ describe("patch()", () => {
 
 describe("reopen()", () => {
   test(
-    "invokes the browser opener (fake open injection via openBrowser:false + direct call)",
+    "calls the injected opener exactly once on reopen()",
     async () => {
-      // We test reopen() through the DevServer interface. The method
-      // unconditionally calls open(url). Since opening a real browser in tests
-      // is undesirable, we verify the call doesn't throw and returns normally.
-      // A more hermetic test would require injecting a fake opener — that
-      // seam is noted as a follow-up for the wrapper-js test suite (AGT-136).
-      const srv = await startTestServer({ openBrowser: false });
-      // Just assert it resolves without throwing; side-effect (tab open) is
-      // tolerated or suppressed by the CI environment.
-      await expect(srv.reopen()).resolves.toBeUndefined();
+      let openCount = 0;
+      let lastUrl = "";
+      const fakeOpener = async (u: string): Promise<void> => {
+        openCount++;
+        lastUrl = u;
+      };
+
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _opener: fakeOpener,
+      });
+      const srv = server;
+
+      await srv.reopen();
+
+      expect(openCount).toBe(1);
+      expect(lastUrl).toContain("127.0.0.1");
     },
     30_000,
   );
@@ -209,7 +224,7 @@ describe("event broker", () => {
 
 describe("mutation responses still work after adding new handlers", () => {
   test(
-    "POST /mutate dispatches to registered handler and returns result",
+    "POST /mutate without auth token returns 401",
     async () => {
       server = await startDevServer({
         view: "trivial",
@@ -226,10 +241,6 @@ describe("mutation responses still work after adding new handlers", () => {
       });
       const srv = server;
 
-      // We need the token from the server to auth — derive it via the HTML bootstrap.
-      // For testing purposes, use the internal auth path via /mutate directly with
-      // the known token embedded in the HTML (token extraction tested separately).
-      // Here we use a simpler approach: ensure the unauthenticated path returns 401.
       const res = await fetch(`${srv.url}/mutate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

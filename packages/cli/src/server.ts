@@ -179,6 +179,12 @@ export interface DevServerOptions {
    * Default: false.
    */
   silent?: boolean;
+  /**
+   * Test seam: replace the browser-open implementation. When provided,
+   * called instead of `open(url)` for both the initial open and `reopen()`.
+   * Never set this in production; use `openBrowser: false` instead.
+   */
+  _opener?: (url: string) => Promise<void>;
 }
 
 export type DevServerEvent = "data-updated" | "view-swapped";
@@ -197,16 +203,15 @@ export interface DevServer {
   update: (data: unknown) => void;
   /**
    * Recompile the view from an inline TSX source string and replace the
-   * in-memory HTML. Emits `view-swapped` on success; emits an `error` on
-   * stdout and preserves the previous HTML on compile failure.
-   * Returns errors array (empty = success).
+   * in-memory HTML. Emits `view-swapped` on success; preserves the previous
+   * HTML on compile failure. Returns errors array (empty = success).
    */
-  swapView: (source: string, opts?: { title?: string; csp?: string; token?: string }) => Promise<import("./compile.js").BuildError[]>;
+  swapView: (source: string) => Promise<import("./compile.js").BuildError[]>;
   /**
    * Atomically replace both data and view source. If compilation fails,
    * neither takes effect. Returns errors array (empty = success).
    */
-  patch: (data: unknown, source: string, opts?: { title?: string; csp?: string; token?: string }) => Promise<import("./compile.js").BuildError[]>;
+  patch: (data: unknown, source: string) => Promise<import("./compile.js").BuildError[]>;
   /**
    * Re-invoke open(url) to launch a fresh browser tab at the same URL.
    * Always opens (duplicates if a tab is already connected).
@@ -241,6 +246,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     csp,
     allowedHosts,
     silent = false,
+    _opener,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -442,23 +448,25 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
     }, 1000);
 
-    // Capture the opener function so reopen() can call it later.
-    async function invokeBrowserOpen(): Promise<void> {
-      if (shell === "app") {
-        const launched = await openInAppMode(url);
-        if (!launched) {
-          process.stderr.write(
-            `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
-          );
-          await open(url);
-        }
-      } else {
-        await open(url);
-      }
-    }
+    // Browser-open implementation, or the test-seam override if one was supplied.
+    const doOpen: () => Promise<void> = _opener
+      ? () => _opener(url)
+      : async () => {
+          if (shell === "app") {
+            const launched = await openInAppMode(url);
+            if (!launched) {
+              process.stderr.write(
+                `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
+              );
+              await open(url);
+            }
+          } else {
+            await open(url);
+          }
+        };
 
     if (openBrowser) {
-      await invokeBrowserOpen();
+      await doOpen();
     }
 
     return {
@@ -476,34 +484,27 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         viewState.data = newData;
         fireEvent("data-updated");
       },
-      async swapView(
-        source: string,
-        swapOpts?: { title?: string; csp?: string; token?: string },
-      ): Promise<import("./compile.js").BuildError[]> {
+      async swapView(source: string): Promise<import("./compile.js").BuildError[]> {
         const r = await compileSource({
           source,
           data: viewState.data,
-          title: swapOpts?.title ?? title,
-          csp: swapOpts?.csp ?? (cspHeader ?? undefined),
-          token: swapOpts?.token ?? token,
+          title,
+          csp: cspHeader ?? undefined,
+          token,
         });
         if (r.errors.length > 0) return r.errors;
         viewState.html = r.html;
         fireEvent("view-swapped");
         return [];
       },
-      async patch(
-        newData: unknown,
-        source: string,
-        patchOpts?: { title?: string; csp?: string; token?: string },
-      ): Promise<import("./compile.js").BuildError[]> {
+      async patch(newData: unknown, source: string): Promise<import("./compile.js").BuildError[]> {
         // Compile first with newData so the HTML embeds the incoming data.
         const r = await compileSource({
           source,
           data: newData,
-          title: patchOpts?.title ?? title,
-          csp: patchOpts?.csp ?? (cspHeader ?? undefined),
-          token: patchOpts?.token ?? token,
+          title,
+          csp: cspHeader ?? undefined,
+          token,
         });
         if (r.errors.length > 0) return r.errors;
         // Only mutate state on compile success (atomicity guarantee).
@@ -514,7 +515,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         return [];
       },
       async reopen(): Promise<void> {
-        await invokeBrowserOpen();
+        await doOpen();
       },
     };
   } catch (err) {
