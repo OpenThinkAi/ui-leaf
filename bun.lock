@@ -16,7 +16,7 @@
     },
     "packages/cli": {
       "name": "@openthink/ui-leaf-cli",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "open": "^11.0.0",
         "react": "^19.2.5",
@@ -32,6 +32,12 @@
     "packages/wrapper-js": {
       "name": "@openthink/ui-leaf-wrapper",
       "version": "0.0.0",
+      "bin": {
+        "ui-leaf": "./bin/ui-leaf",
+      },
+      "devDependencies": {
+        "tsup": "^8.4.0",
+      },
     },
   },
   "packages": {
