@@ -92,7 +92,8 @@ import type { ViewProps, MutationHandler } from "@openthink/ui-leaf/view";
 
 await mount({
   view,                                      // resolves <viewsRoot>/<view>.tsx
-  data,                                      // JSON-serializable, becomes data prop
+  data,                                      // JSON-serializable, becomes data prop (convenience default)
+  dataLoader,                                // optional async fn; serves data via authenticated /api/data (no disk write)
   mutations,                                 // Record<string, MutationHandler> (optional)
   viewsRoot,                                 // optional, default: <cwd>/views
   title,                                     // optional, default: "ui-leaf"
@@ -159,7 +160,18 @@ Be deliberate — every name you add becomes a viable rebinding target. Don't ad
 
 ui-leaf serialises the `data` you pass to `mount()` into `<tmpdir()>/ui-leaf-XXXXXX/index.html` so the dev server can serve it. The directory is created with `mode 0700` (readable only by the same UID), and ui-leaf removes it on `close()`, on `SIGINT`/`SIGTERM`, on uncaught throws via a `process.on('exit')` fallback, and opportunistically sweeps `ui-leaf-*` siblings older than 24h on every startup to catch anything that still slipped through.
 
-What still leaks: `SIGKILL`, OOM-kill, and abrupt power loss skip every Node hook, so the directory stays on disk until the next `mount()` runs (the startup sweep) or the OS rotates `tmpdir()` (on macOS, only across reboots; on many Linux systems, only via `tmpfiles.d` age policies). If the data is sensitive enough that even that bounded window is too long, keep it in memory in your CLI and inject it into the view via an authenticated `connect-src 'self'` fetch on boot rather than passing it through `data`.
+What still leaks: `SIGKILL`, OOM-kill, and abrupt power loss skip every Node hook, so the directory stays on disk until the next `mount()` runs (the startup sweep) or the OS rotates `tmpdir()` (on macOS, only across reboots; on many Linux systems, only via `tmpfiles.d` age policies). If the data is sensitive enough that even that bounded window is too long, use `dataLoader` instead of `data`:
+
+```ts
+mount({
+  view: "report",
+  dataLoader: async () => {
+    return await db.fetchSensitiveRecords(); // stays in memory; never touches disk
+  },
+});
+```
+
+`dataLoader` invokes the function once at mount time, captures the result in-process, and serves it at a token-gated `GET /api/data` endpoint using the same per-launch token as `/mutate`. The view fetches `/api/data` on first render. Nothing is written to `index.html` or any tempdir file — the payload stays in memory for the entire mount lifetime. `data` remains the ergonomic default for routine payloads where disk residency is not a concern.
 
 ## Sharing views across users
 

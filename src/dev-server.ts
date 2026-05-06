@@ -168,7 +168,8 @@ function resolveCsp(opt: CspOption | undefined): string | null {
 
 export interface DevServerOptions {
   view: string;
-  data: unknown;
+  data?: unknown;
+  dataLoader?: () => Promise<unknown>;
   viewsRoot: string;
   // biome-ignore lint/suspicious/noExplicitAny: each handler has its own
   // arg/return types; the map can't share one shape.
@@ -304,6 +305,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   const {
     view,
     data,
+    dataLoader,
     viewsRoot,
     mutations = {},
     title = "ui-leaf",
@@ -360,6 +362,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     );
   }
 
+  if (data !== undefined && dataLoader) {
+    throw new Error("ui-leaf: pass data or dataLoader, not both");
+  }
+
   const token = randomBytes(32).toString("hex");
   tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-"));
 
@@ -383,17 +389,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   // Fire-and-forget so the sweep never blocks startup.
   void sweepStaleTempDirs();
 
+  // Eagerly invoke the loader before writing any files. The resolved value
+  // lives only in this closure — it is never written to disk. If the loader
+  // rejects, the setup-failure catch below sweeps tempDir and removes the
+  // exit fallback before re-throwing, so nothing lingers on disk.
+  let loadedData: unknown;
+  if (dataLoader) {
+    loadedData = await dataLoader();
+  }
+
   const entryPath = join(dirToSweep, "entry.tsx");
-  await writeFile(
-    entryPath,
-    `import { createRoot } from "react-dom/client";
-import View from ${JSON.stringify(viewAbs)};
 
-const ctx = (globalThis).__UI_LEAF__ || {};
-const data = ctx.data;
-const token = ctx.token;
-
-async function mutate(name, args) {
+  // Shared browser-side functions: same across both entry variants.
+  const sharedEntryFns = `async function mutate(name, args) {
   const res = await fetch("/mutate", {
     method: "POST",
     headers: {
@@ -427,7 +435,43 @@ async function heartbeat() {
   }
 }
 setInterval(heartbeat, 5000);
-heartbeat();
+heartbeat();`;
+
+  await writeFile(
+    entryPath,
+    dataLoader
+      ? `import { createRoot } from "react-dom/client";
+import View from ${JSON.stringify(viewAbs)};
+
+const ctx = (globalThis).__UI_LEAF__ || {};
+const token = ctx.token;
+
+${sharedEntryFns}
+
+// Heartbeat runs outside bootstrap so a slow loader cannot trip the watcher.
+async function bootstrap() {
+  const res = await fetch("/api/data", {
+    headers: token ? { Authorization: "Bearer " + token } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(function () { return ""; });
+    throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
+  }
+  const data = await res.json();
+  const el = document.getElementById("root");
+  if (!el) throw new Error("ui-leaf: #root element missing");
+  createRoot(el).render(<View data={data} mutate={mutate} />);
+}
+bootstrap();
+`
+      : `import { createRoot } from "react-dom/client";
+import View from ${JSON.stringify(viewAbs)};
+
+const ctx = (globalThis).__UI_LEAF__ || {};
+const data = ctx.data;
+const token = ctx.token;
+
+${sharedEntryFns}
 
 const el = document.getElementById("root");
 if (!el) throw new Error("ui-leaf: #root element missing");
@@ -439,13 +483,17 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   // assignment uses JSON.parse(…) at load time rather than an object literal.
   // This sidesteps ECMAScript Annex B.3.1, which lets a `__proto__` key in
   // an object literal mutate the prototype — JSON.parse has no such carve-out.
-  const dataInline = escapeForScriptTag(JSON.stringify(JSON.stringify(data)));
   const tokenInline = JSON.stringify(token);
   const titleEscaped = title
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   const htmlPath = join(dirToSweep, "index.html");
+  // When dataLoader is set, omit data from the inline script — the loader
+  // value is served at /api/data and never written to disk.
+  const scriptContent = dataLoader
+    ? `{ token: ${tokenInline} }`
+    : `{ data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))}), token: ${tokenInline} }`;
   await writeFile(
     htmlPath,
     `<!DOCTYPE html>
@@ -453,7 +501,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   <head>
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
-    <script>window.__UI_LEAF__ = { data: JSON.parse(${dataInline}), token: ${tokenInline} };</script>
+    <script>window.__UI_LEAF__ = ${scriptContent};</script>
   </head>
   <body>
     <div id="root"></div>
@@ -561,6 +609,18 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
                     error: err instanceof Error ? err.message : String(err),
                   });
                 }
+                return;
+              }
+              if (req.method === "GET" && url === "/api/data") {
+                if (!dataLoader) {
+                  next();
+                  return;
+                }
+                if (!checkAuth(req)) {
+                  sendJson(res, 401, { error: "unauthorized" });
+                  return;
+                }
+                sendJson(res, 200, loadedData !== undefined ? loadedData : null);
                 return;
               }
               next();
