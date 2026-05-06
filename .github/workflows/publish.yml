@@ -2,8 +2,9 @@ name: Publish to npm
 
 # Fires when commits land on main (including via the stamp server's
 # post-receive mirror). Splits into a `plan` job (reads package.json
-# version, checks npm) and a `publish` job gated on the plan's output —
-# every non-bump merge no-ops with the publish job showing as Skipped.
+# version, checks npm) and two gated jobs — `publish` (npm) and `release`
+# (GH Release + binary artifacts) — both conditioned on plan.publishing.
+# Non-bump merges no-op with both jobs showing as Skipped.
 #
 # Auth: Trusted Publishing via OIDC. No NPM_TOKEN secret; the npm package
 # must have a Trusted Publisher configured on the npm side pointing at
@@ -14,6 +15,24 @@ name: Publish to npm
 # Manual re-run: `workflow_dispatch` re-publishes whatever's in
 # package.json on the default branch — useful for recovering from a
 # Trusted Publisher misconfig without burning another version bump.
+#
+# Partial-publish recovery:
+#   Binaries uploaded but npm failed → re-trigger via workflow_dispatch.
+#   The npm gate (plan.publishing) is idempotent; the release job will
+#   update the existing GH Release (allow_updates: true) and re-upload
+#   artifacts, then the publish job will retry.
+#
+#   npm published but release/binaries failed → re-trigger via
+#   workflow_dispatch. The npm gate sees the version already on npm and
+#   skips the publish job; the release job re-runs and updates the GH
+#   Release.
+#
+# TODO (F6): Once AGT-133–135 ship wrapper-js source, switch the npm
+# publish target from the root package to packages/wrapper-js. Update
+# `files` in packages/wrapper-js/package.json, drop `prepublishOnly`
+# from root package.json, and reconfigure the npm Trusted Publisher
+# binding at https://www.npmjs.com/package/@openthink/ui-leaf/access to
+# point at the wrapper-js package name.
 
 on:
   push:
@@ -30,6 +49,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       publishing: ${{ steps.check_npm.outputs.published == 'false' }}
+      npm_tag: ${{ steps.dist_tag.outputs.npm_tag }}
+      prerelease: ${{ steps.dist_tag.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -57,6 +78,73 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
           fi
+
+      - name: Determine dist-tag and prerelease flag
+        id: dist_tag
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-'; then
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: plan
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.13
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build binaries
+        run: bun run build:binaries
+
+      - name: Resolve release notes
+        id: notes
+        run: |
+          F="RELEASE_NOTES_v${{ needs.plan.outputs.version }}.md"
+          if [ -f "$F" ]; then
+            echo "path=$F" >> "$GITHUB_OUTPUT"
+          fi
+
+      # body_path takes priority over generate_release_notes when both are set;
+      # softprops prepends the body file content before the auto-generated notes.
+      # When no RELEASE_NOTES_v<version>.md file exists, body_path is empty and
+      # only auto-generated notes are used.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: v${{ needs.plan.outputs.version }}
+          name: v${{ needs.plan.outputs.version }}
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
+          fail_on_unmatched_files: true
+          allow_updates: true
+          files: |
+            dist/ui-leaf-darwin-arm64
+            dist/ui-leaf-darwin-x64
+            dist/ui-leaf-linux-x64
+            dist/ui-leaf-linux-arm64
+            dist/ui-leaf-windows-x64.exe
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
     needs: plan
@@ -110,4 +198,4 @@ jobs:
       # configured at https://www.npmjs.com/package/@openthink/ui-leaf/access
       # pointing at this repo + workflow file. No NPM_TOKEN secret needed.
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag ${{ needs.plan.outputs.npm_tag }}
