@@ -435,7 +435,11 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
 `,
   );
 
-  const dataInline = escapeForScriptTag(JSON.stringify(data));
+  // Double-stringify encodes data as a JS string literal so the inline
+  // assignment uses JSON.parse(…) at load time rather than an object literal.
+  // This sidesteps ECMAScript Annex B.3.1, which lets a `__proto__` key in
+  // an object literal mutate the prototype — JSON.parse has no such carve-out.
+  const dataInline = escapeForScriptTag(JSON.stringify(JSON.stringify(data)));
   const tokenInline = JSON.stringify(token);
   const titleEscaped = title
     .replace(/&/g, "&amp;")
@@ -449,7 +453,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   <head>
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
-    <script>window.__UI_LEAF__ = { data: ${dataInline}, token: ${tokenInline} };</script>
+    <script>window.__UI_LEAF__ = { data: JSON.parse(${dataInline}), token: ${tokenInline} };</script>
   </head>
   <body>
     <div id="root"></div>
