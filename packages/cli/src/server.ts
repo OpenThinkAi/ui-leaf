@@ -336,102 +336,128 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
     const bunPort = port === undefined ? 5810 : port; // port: 0 → OS picks
     let actualPort = bunPort;
-    // Auto-bump: if bunPort is busy, try bunPort+1 … up to MAX_PORT_ATTEMPTS.
-    // port: 0 goes straight to Bun (OS assigns a free port; never EADDRINUSE).
-    const server = (() => {
-      const handler = (req: Request): Response | Promise<Response> => {
-        const host = req.headers.get("host") ?? undefined;
-        const origin = req.headers.get("origin") ?? undefined;
 
-        // DNS-rebinding gate: reject any request (including WebSocket upgrade
-        // attempts) that does not arrive with an allowed Host. When Origin is
-        // present, it must also be in the allowed set.
-        const hostOk = isAllowedHost(host, allowedHostSet);
-        const originOk = isAllowedOrigin(origin, allowedHostSet);
-        if (!hostOk || !originOk) {
-          const offender = !hostOk
-            ? `Host "${host ?? "(absent)"}"`
-            : `Origin "${origin}"`;
-          return new Response(
-            `ui-leaf: refusing request with ${offender} — only the following hostnames are accepted to prevent DNS rebinding: ${allowedHostList}. Open the server at http://localhost:${actualPort}/ or http://127.0.0.1:${actualPort}/, or pass { allowedHosts: ["my-alias"] } to mount() to permit a custom alias.\n`,
-            { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } },
-          );
-        }
+    const handler = (req: Request): Response | Promise<Response> => {
+      const host = req.headers.get("host") ?? undefined;
+      const origin = req.headers.get("origin") ?? undefined;
 
-        const headers: Record<string, string> = {};
-        if (cspHeader) {
-          headers["Content-Security-Policy"] = cspHeader;
-        }
+      // DNS-rebinding gate: reject any request (including WebSocket upgrade
+      // attempts) that does not arrive with an allowed Host. When Origin is
+      // present, it must also be in the allowed set.
+      const hostOk = isAllowedHost(host, allowedHostSet);
+      const originOk = isAllowedOrigin(origin, allowedHostSet);
+      if (!hostOk || !originOk) {
+        const offender = !hostOk
+          ? `Host "${host ?? "(absent)"}"`
+          : `Origin "${origin}"`;
+        return new Response(
+          `ui-leaf: refusing request with ${offender} — only the following hostnames are accepted to prevent DNS rebinding: ${allowedHostList}. Open the server at http://localhost:${actualPort}/ or http://127.0.0.1:${actualPort}/, or pass { allowedHosts: ["my-alias"] } to mount() to permit a custom alias.\n`,
+          { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+        );
+      }
 
-        const url = new URL(req.url);
-        const path = url.pathname;
-        const method = req.method;
+      const headers: Record<string, string> = {};
+      if (cspHeader) {
+        headers["Content-Security-Policy"] = cspHeader;
+      }
 
-        if (method === "GET" && path === "/") {
-          return new Response(viewState.html, {
-            status: 200,
-            headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
-          });
-        }
+      const url = new URL(req.url);
+      const path = url.pathname;
+      const method = req.method;
 
-        if (method === "POST" && path === "/heartbeat") {
-          if (!checkAuth(req, token)) {
-            return new Response(JSON.stringify({ error: "unauthorized" }), {
-              status: 401,
-              headers: { ...headers, "Content-Type": "application/json" },
-            });
-          }
-          lastHeartbeatAt = Date.now();
-          if (connectionState === "disconnected") {
-            connectionState = "connected";
-            fireEvent("reconnected");
-          } else if (connectionState === "connecting") {
-            connectionState = "connected";
-          }
-          return new Response("", { status: 204, headers });
-        }
+      if (method === "GET" && path === "/") {
+        return new Response(viewState.html, {
+          status: 200,
+          headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
 
-        if (method === "POST" && path === "/mutate") {
-          if (!checkAuth(req, token)) {
-            return new Response(JSON.stringify({ error: "unauthorized" }), {
-              status: 401,
-              headers: { ...headers, "Content-Type": "application/json" },
-            });
-          }
-          return handleMutate(req, mutations, headers);
-        }
-
-        if (method === "GET" && path === "/api/data") {
-          if (!dataLoader) {
-            return new Response(JSON.stringify({ error: "not found" }), {
-              status: 404,
-              headers: { ...headers, "Content-Type": "application/json" },
-            });
-          }
-          if (!checkAuth(req, token)) {
-            return new Response(JSON.stringify({ error: "unauthorized" }), {
-              status: 401,
-              headers: { ...headers, "Content-Type": "application/json" },
-            });
-          }
-          return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
-            status: 200,
+      if (method === "POST" && path === "/heartbeat") {
+        if (!checkAuth(req, token)) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
             headers: { ...headers, "Content-Type": "application/json" },
           });
         }
+        lastHeartbeatAt = Date.now();
+        if (connectionState === "disconnected") {
+          connectionState = "connected";
+          fireEvent("reconnected");
+        } else if (connectionState === "connecting") {
+          connectionState = "connected";
+        }
+        return new Response("", { status: 204, headers });
+      }
 
-        return new Response(JSON.stringify({ error: "not found" }), {
-          status: 404,
+      if (method === "POST" && path === "/mutate") {
+        if (!checkAuth(req, token)) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { ...headers, "Content-Type": "application/json" },
+          });
+        }
+        return handleMutate(req, mutations, headers);
+      }
+
+      if (method === "GET" && path === "/api/data") {
+        if (!dataLoader) {
+          return new Response(JSON.stringify({ error: "not found" }), {
+            status: 404,
+            headers: { ...headers, "Content-Type": "application/json" },
+          });
+        }
+        if (!checkAuth(req, token)) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { ...headers, "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
+          status: 200,
           headers: { ...headers, "Content-Type": "application/json" },
         });
-      };
+      }
+
+      return new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { ...headers, "Content-Type": "application/json" },
+      });
+    };
+
+    let heartbeatWatcher: NodeJS.Timeout | undefined;
+
+    // `bunServer` is assigned immediately after this declaration by the IIFE
+    // below. The `!` assertion is safe: cleanup is never called during server
+    // construction, only after the server is running.
+    let bunServer!: ReturnType<typeof Bun.serve>;
+
+    const cleanup = async (reason: CloseReason): Promise<void> => {
+      if (closeRequested) return;
+      closeRequested = true;
+      if (heartbeatWatcher) clearInterval(heartbeatWatcher);
+      await bunServer.stop(true);
+      if (restoreStdout) restoreStdout();
+      resolveClosed(reason);
+    };
+
+    // Auto-bump: if bunPort is busy, try bunPort+1 … up to MAX_PORT_ATTEMPTS.
+    // port: 0 goes straight to Bun (OS assigns a free port; never EADDRINUSE).
+    // The error handler routes Bun-level socket errors through cleanup("error").
+    const serverErrorHandler = (_err: Error): Response => {
+      void cleanup("error");
+      return new Response(JSON.stringify({ error: "internal server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    bunServer = (() => {
       if (bunPort === 0) {
-        return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+        return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler, error: serverErrorHandler });
       }
       const MAX_PORT_ATTEMPTS = 10;
       for (let i = 0; i < MAX_PORT_ATTEMPTS; i++) {
         try {
-          return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler });
+          return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler, error: serverErrorHandler });
         } catch (err) {
           const isAddrinuse = err instanceof Error && err.message.includes("EADDRINUSE");
           if (!isAddrinuse || i === MAX_PORT_ATTEMPTS - 1) {
@@ -446,21 +472,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
       throw new Error("unreachable"); // TypeScript: loop always returns or throws
     })();
-
+    const server = bunServer;
     actualPort = server.port ?? bunPort;
     const url = `http://127.0.0.1:${actualPort}`;
     const startedAt = Date.now();
-
-    let heartbeatWatcher: NodeJS.Timeout | undefined;
-
-    const cleanup = async (reason: CloseReason): Promise<void> => {
-      if (closeRequested) return;
-      closeRequested = true;
-      if (heartbeatWatcher) clearInterval(heartbeatWatcher);
-      await server.stop(true);
-      if (restoreStdout) restoreStdout();
-      resolveClosed(reason);
-    };
 
     heartbeatWatcher = setInterval(() => {
       if (closeRequested) return;

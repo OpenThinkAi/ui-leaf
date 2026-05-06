@@ -188,16 +188,10 @@ describe("disconnect/reconnect lifecycle", () => {
         await sendHeartbeat(view.url, token);
         await reconnectedP;
 
-        // Re-fetch the page; the new data should be in the HTML.
+        // Re-fetch the page. update() doesn't recompile the HTML (data is served
+        // separately via /api/data for dataLoader, or embedded at compile time for
+        // static data). Just verify the server is still alive and responding.
         const resp = await fetch(view.url);
-        const html = await resp.text();
-        const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
-        if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
-        const ctx = vm.createContext({ window: {} });
-        vm.runInContext(match[1], ctx);
-        // update() doesn't recompile HTML; verify that the server is still alive
-        // and serving. The data-in-HTML path only updates on patch(); for update()
-        // the data is served separately. Just verify the server responds 200.
         expect(resp.status).toBe(200);
       } finally {
         await view.close();
