@@ -118,18 +118,20 @@ export interface MountOptions {
    */
   heartbeatTimeoutMs?: number;
   /**
-   * Content-Security-Policy enforcement. Defaults to "off".
+   * Content-Security-Policy enforcement. Defaults to `"strict"`.
+   *
+   * - `"strict"` — ui-leaf sends a balanced preset that browser-enforces
+   *   the broker principle: `connect-src 'self'` prevents views from
+   *   fetching external APIs (all data flows through `data` and
+   *   `mutations`); `form-action 'self'` closes the form-submit
+   *   exfiltration vector. HTTPS images/fonts and inline styles for
+   *   React are permitted. View files can only *add* further restrictions
+   *   via meta tag, never remove them.
    *
    * - `"off"` — no CSP header sent. Views can fetch arbitrary URLs and
-   *   embed external resources freely. The data/mutations convention is
-   *   honor-system.
-   *
-   * - `"strict"` — ui-leaf sends a balanced preset: locks `connect-src`
-   *   to same-origin (the architectural lock — views cannot fetch
-   *   external APIs, so all data flows through `data` and `mutations`),
-   *   while permitting common needs (HTTPS images / fonts, inline
-   *   styles for React). View files can only *add* further restrictions
-   *   via meta tag, never remove them.
+   *   submit forms to any origin. The data/mutations contract is
+   *   honor-system only. Use this if you have a legitimate need for
+   *   cross-origin access and accept the trade-off.
    *
    * - `string` — raw CSP header value for full control. Use when the
    *   "strict" preset doesn't fit (e.g. you need `connect-src` to
