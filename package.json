@@ -47,6 +47,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "bun run --filter '@openthink/ui-leaf-cli' build",
+    "build:binaries": "bun run scripts/build-binaries.ts",
     "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
     "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
