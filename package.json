@@ -1,6 +1,6 @@
 {
   "name": "@openthink/ui-leaf",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Customizable browser views, on demand, for any CLI.",
   "license": "MIT",
   "author": "Matt Pardini",
