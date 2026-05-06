@@ -112,6 +112,11 @@ export interface CompileResult {
 const SESSION_ENDED_HTML =
   '<div style="font-family:sans-serif;padding:2em;color:#555"><p>Session ended — re-launch the CLI to continue.</p></div>';
 
+// Overlay rendered when the mount terminates. v1.x extension point: replaceable
+// via a consumer-supplied template slot (deferred per plan-approval decision).
+const CLOSED_OVERLAY_HTML =
+  '<div style="font-family:sans-serif;padding:2em;color:#555"><p>This view has closed.</p></div>';
+
 // Shared bridge injected into every compiled entry: mutation + heartbeat.
 const SHARED_BRIDGE = `
 async function mutate(name: string, args?: unknown): Promise<unknown> {
@@ -146,7 +151,59 @@ async function heartbeat(): Promise<void> {
   } catch { /* server may have shut down; ignore */ }
 }
 setInterval(heartbeat, 5000);
-heartbeat();`;
+heartbeat();
+
+function subscribeEvents(onEvent: (ev: { type: string; [k: string]: unknown }) => void): void {
+  let delay = 250;
+  const budget = 30_000;
+  const started = Date.now();
+  let done = false;
+
+  async function connect(): Promise<void> {
+    try {
+      const res = await fetch("/events", {
+        headers: token ? { "X-UI-Leaf-Token": token } : {},
+      });
+      if (!res.ok || !res.body) throw new Error("bad status " + res.status);
+      delay = 250;
+      const reader = res.body.getReader();
+      const dec = new TextDecoder("utf-8");
+      let buf = "";
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+        buf += dec.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\\n\\n")) !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          for (const line of chunk.split("\\n")) {
+            if (line.startsWith("data:")) {
+              try {
+                const ev = JSON.parse(line.slice(5).trimStart()) as { type: string; [k: string]: unknown };
+                if (ev.type === "closing") done = true;
+                onEvent(ev);
+              } catch { /* skip malformed event */ }
+            }
+          }
+        }
+        if (done) return;
+      }
+    } catch {
+      if (done) return;
+    }
+    if (done) return;
+    if (Date.now() - started > budget) {
+      onEvent({ type: "closing", reason: "error" });
+      return;
+    }
+    await new Promise<void>((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 5_000);
+    void connect();
+  }
+
+  void connect();
+}`;
 
 /** Run Bun.build on `entryPath` and return the raw JS output or errors. */
 async function runBunBuild(entryPath: string): Promise<{ js: string } | { errors: BuildError[] }> {
@@ -307,10 +364,21 @@ ${SHARED_BRIDGE}
       const text = await res.text().catch(() => "");
       throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
     }
-    const data = await res.json();
+    let currentData: unknown = await res.json();
     const el = document.getElementById("root");
     if (!el) throw new Error("ui-leaf: #root element missing");
-    createRoot(el).render(<View data={data} mutate={mutate} />);
+    const root = createRoot(el);
+    root.render(<View data={currentData} mutate={mutate} />);
+    subscribeEvents((ev) => {
+      if (ev.type === "data-updated") {
+        currentData = ev.data;
+        root.render(<View data={currentData} mutate={mutate} />);
+      } else if (ev.type === "view-swapped") {
+        window.location.reload();
+      } else if (ev.type === "closing") {
+        el.innerHTML = ${JSON.stringify(CLOSED_OVERLAY_HTML)};
+      }
+    });
   }
   bootstrap();
 }
@@ -325,12 +393,23 @@ if (ctx.sessionEnded) {
   const root = document.getElementById("root");
   if (root) root.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
 } else {
-  const data = ctx.data;
+  let currentData: unknown = ctx.data;
 ${SHARED_BRIDGE}
 
   const el = document.getElementById("root");
   if (!el) throw new Error("ui-leaf: #root element missing");
-  createRoot(el).render(<View data={data} mutate={mutate} />);
+  const root = createRoot(el);
+  root.render(<View data={currentData} mutate={mutate} />);
+  subscribeEvents((ev) => {
+    if (ev.type === "data-updated") {
+      currentData = ev.data;
+      root.render(<View data={currentData} mutate={mutate} />);
+    } else if (ev.type === "view-swapped") {
+      window.location.reload();
+    } else if (ev.type === "closing") {
+      el.innerHTML = ${JSON.stringify(CLOSED_OVERLAY_HTML)};
+    }
+  });
 }
 `;
 
@@ -376,12 +455,23 @@ if (ctx.sessionEnded) {
   const root = document.getElementById("root");
   if (root) root.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
 } else {
-  const data = ctx.data;
+  let currentData: unknown = ctx.data;
 ${SHARED_BRIDGE}
 
   const el = document.getElementById("root");
   if (!el) throw new Error("ui-leaf: #root element missing");
-  createRoot(el).render(<View data={data} mutate={mutate} />);
+  const root = createRoot(el);
+  root.render(<View data={currentData} mutate={mutate} />);
+  subscribeEvents((ev) => {
+    if (ev.type === "data-updated") {
+      currentData = ev.data;
+      root.render(<View data={currentData} mutate={mutate} />);
+    } else if (ev.type === "view-swapped") {
+      window.location.reload();
+    } else if (ev.type === "closing") {
+      el.innerHTML = ${JSON.stringify(CLOSED_OVERLAY_HTML)};
+    }
+  });
 }
 `;
 

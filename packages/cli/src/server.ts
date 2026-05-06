@@ -326,6 +326,20 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       for (const fn of listeners.get(event)!) fn();
     }
 
+    const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+    const sseEncoder = new TextEncoder();
+
+    function broadcast(event: Record<string, unknown>): void {
+      const frame = sseEncoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+      for (const controller of sseClients) {
+        try {
+          controller.enqueue(frame);
+        } catch {
+          sseClients.delete(controller);
+        }
+      }
+    }
+
     let lastHeartbeatAt = Date.now();
     let closeRequested = false;
     let connectionState: ConnectionState = "connecting";
@@ -409,6 +423,37 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         });
       }
 
+      if (method === "GET" && path === "/events") {
+        if (!checkAuth(req, token)) {
+          return new Response("", { status: 401, headers });
+        }
+        let sseController!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            sseController = controller;
+            sseClients.add(controller);
+            // Enqueue an SSE comment immediately so Bun flushes response headers
+            // before any broadcast event arrives (empty streams block header send).
+            controller.enqueue(sseEncoder.encode(": connected\n\n"));
+            req.signal?.addEventListener("abort", () => {
+              sseClients.delete(sseController);
+              try { sseController.close(); } catch { /* already closed */ }
+            });
+          },
+          cancel() {
+            sseClients.delete(sseController);
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            ...headers,
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+          },
+        });
+      }
+
       return new Response(JSON.stringify({ error: "not found" }), {
         status: 404,
         headers: { ...headers, "Content-Type": "application/json" },
@@ -426,7 +471,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       if (closeRequested) return;
       closeRequested = true;
       if (heartbeatWatcher) clearInterval(heartbeatWatcher);
-      await bunServer.stop(true);
+      broadcast({ type: "closing", reason });
+      for (const controller of sseClients) {
+        try { controller.close(); } catch { /* already closed */ }
+      }
+      sseClients.clear();
+      // Graceful stop: waits for in-flight writes (including the closing SSE
+      // event) to flush before tearing down TCP connections.
+      await bunServer.stop();
       if (restoreStdout) restoreStdout();
       resolveClosed(reason);
     };
@@ -446,12 +498,12 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     };
     bunServer = (() => {
       if (bunPort === 0) {
-        return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler, error: serverErrorHandler });
+        return Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler, error: serverErrorHandler, idleTimeout: 0 });
       }
       const MAX_PORT_ATTEMPTS = 10;
       for (let i = 0; i < MAX_PORT_ATTEMPTS; i++) {
         try {
-          return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler, error: serverErrorHandler });
+          return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler, error: serverErrorHandler, idleTimeout: 0 });
         } catch (err) {
           const isAddrinuse = err instanceof Error && err.message.includes("EADDRINUSE");
           if (!isAddrinuse || i === MAX_PORT_ATTEMPTS - 1) {
@@ -521,6 +573,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       },
       update(newData: unknown): void {
         viewState.data = newData;
+        broadcast({ type: "data-updated", data: newData });
         fireEvent("data-updated");
       },
       async swapView(source: string): Promise<import("./compile.js").BuildError[]> {
@@ -533,6 +586,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         });
         if (r.errors.length > 0) return r.errors;
         viewState.html = r.html;
+        broadcast({ type: "view-swapped" });
         fireEvent("view-swapped");
         return [];
       },
@@ -549,6 +603,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         // Only mutate state on compile success (atomicity guarantee).
         viewState.data = newData;
         viewState.html = r.html;
+        broadcast({ type: "data-updated", data: newData });
+        broadcast({ type: "view-swapped" });
         fireEvent("data-updated");
         fireEvent("view-swapped");
         return [];
