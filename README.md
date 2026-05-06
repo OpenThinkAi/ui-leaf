@@ -82,6 +82,8 @@ Three reasons:
 
 The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, and it's served inline in the HTML at `/index.html` — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch the page, grep the token out, and call `/mutate` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
 
+The same trust boundary applies to the `data` you pass to `mount()`. The payload is JSON-inlined into `window.__UI_LEAF__.data` in the same `/index.html`, and is also written to `<tmpdir()>/ui-leaf-XXXXXX/index.html` on disk for the mount lifetime — readable by the same set of same-UID local processes that can read the token. For PHI, PCI, financial records, or anything else where a same-UID local reader is in your threat model, don't pass the sensitive payload through `data`; keep it in your CLI's memory and inject it into the view via an authenticated `connect-src 'self'` fetch on boot. See "Data-at-rest in the temp directory" below for the disk-residency details.
+
 ## API surface
 
 ```ts
