@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/postinstall.ts"],
+  entry: ["src/postinstall.ts", "src/spawn.ts"],
   format: ["esm"],
   target: "node22",
   dts: false,
