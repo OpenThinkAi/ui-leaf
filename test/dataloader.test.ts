@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mount } from "../src/index.ts";
+import { mount } from "../packages/cli/src/index.ts";
 import * as vm from "node:vm";
 import { join } from "node:path";
 
