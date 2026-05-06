@@ -274,6 +274,12 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
         port: server.port,
         closed: Promise.resolve(),
         close: server.close,
+        update: server.update.bind(server),
+        swapView: (source: string) => server.swapView(source),
+        patch: (data: unknown, source: string) => server.patch(data, source),
+        reopen: server.reopen.bind(server),
+        on: server.on.bind(server),
+        off: server.off.bind(server),
       };
     }
     opts.signal.addEventListener(
