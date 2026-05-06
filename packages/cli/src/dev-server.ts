@@ -12,6 +12,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createRsbuild } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
 import open, { apps } from "open";
+import { escapeForScriptTag } from "./internal/html.js";
 
 // Resolve react / react-dom from ui-leaf's installed location using
 // Node's actual resolver. With hoisting (npm/pnpm/bun), these end up in
@@ -222,15 +223,6 @@ export interface DevServer {
   /** Resolves when the view is closed (heartbeat timeout) or close() is called. */
   closed: Promise<void>;
   close: () => Promise<void>;
-}
-
-function escapeForScriptTag(json: string): string {
-  // Defend against </script> break-out and U+2028 / U+2029 line terminators
-  // that JSON.stringify emits raw but JS string literals don't accept.
-  return json
-    .replace(/</g, "\\u003c")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
