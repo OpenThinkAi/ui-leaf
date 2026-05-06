@@ -10,7 +10,7 @@ import { escapeForScriptTag } from "./internal/html.js";
 // the binary's embedded virtual filesystem. AGT-131 (cross-compile script)
 // will need a Bun.build plugin or Bun embedded-files to ensure React is
 // reachable inside the compiled binary. Flagging here so AGT-131 is not blindsided.
-const _req = createRequire(import.meta.url);
+const requireFromHere = createRequire(import.meta.url);
 
 // BunPlugin that rewrites bare react/react-dom imports to absolute paths
 // under ui-leaf's installed node_modules. Ensures the bundled view always
@@ -23,7 +23,7 @@ const reactAliasPlugin: BunPlugin = {
     //          react-dom, react-dom/client, react-dom/profiling, etc.
     build.onResolve({ filter: /^react($|\/|-dom($|\/))/ }, (args) => {
       try {
-        return { path: _req.resolve(args.path) };
+        return { path: requireFromHere.resolve(args.path) };
       } catch {
         return {
           path: args.path,
@@ -221,7 +221,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
       .replace(/>/g, "&gt;");
 
     const cspMeta = csp
-      ? `    <meta http-equiv="Content-Security-Policy" content="${csp.replace(/"/g, "&quot;")}" />\n`
+      ? `    <meta http-equiv="Content-Security-Policy" content="${csp.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" />\n`
       : "";
 
     // Double-stringify data: outer JSON.stringify produces a JSON string, then
