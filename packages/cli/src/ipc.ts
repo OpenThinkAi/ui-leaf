@@ -99,7 +99,7 @@ export function emit(event: OutboundEvent): string {
 // silently dropping or crashing.
 export type ParseOutcome<T> =
   | { ok: true; msg: T }
-  | { ok: false; kind: "json"; raw: string; reason: string }
+  | { ok: false; kind: "json"; reason: string }
   | { ok: false; kind: "missing-version" }
   | { ok: false; kind: "unsupported-version"; got: unknown };
 
@@ -113,7 +113,6 @@ export function parseInbound<T extends { version: ProtocolVersion }>(
     return {
       ok: false,
       kind: "json",
-      raw: line,
       reason: err instanceof Error ? err.message : String(err),
     };
   }
