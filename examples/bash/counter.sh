@@ -32,8 +32,8 @@ VIEWS_ROOT="$(cd "$VIEWS_ROOT" && pwd)"
 
 # Pick the binary: prefer the local dist build (during development), fall
 # back to whatever's on PATH (e.g. `npm i -g @openthink/ui-leaf`).
-if [ -x "${SCRIPT_DIR}/../../dist/cli.js" ]; then
-  UI_LEAF_BIN=("node" "${SCRIPT_DIR}/../../dist/cli.js")
+if [ -x "${SCRIPT_DIR}/../../packages/cli/dist/cli.js" ]; then
+  UI_LEAF_BIN=("node" "${SCRIPT_DIR}/../../packages/cli/dist/cli.js")
 else
   UI_LEAF_BIN=("ui-leaf")
 fi

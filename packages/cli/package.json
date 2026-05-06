@@ -1,6 +1,23 @@
 {
   "name": "@openthink/ui-leaf-cli",
-  "version": "0.0.0",
+  "version": "0.4.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "tsup": "^8.4.0"
+  },
+  "dependencies": {
+    "@rsbuild/core": "^2.0.1",
+    "@rsbuild/plugin-react": "^2.0.0",
+    "open": "^11.0.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  }
 }

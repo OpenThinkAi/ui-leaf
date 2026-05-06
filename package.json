@@ -25,44 +25,35 @@
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./packages/cli/dist/index.d.ts",
+      "import": "./packages/cli/dist/index.js"
     },
     "./view": {
-      "types": "./dist/view.d.ts",
-      "import": "./dist/view.js"
+      "types": "./packages/cli/dist/view.d.ts",
+      "import": "./packages/cli/dist/view.js"
     }
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./packages/cli/dist/index.js",
+  "types": "./packages/cli/dist/index.d.ts",
   "bin": {
-    "ui-leaf": "./dist/cli.js"
+    "ui-leaf": "./packages/cli/dist/cli.js"
   },
   "files": [
-    "dist",
+    "packages/cli/dist",
+    "packages/cli/package.json",
     "README.md",
     "LICENSE"
   ],
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "typecheck": "tsc -b && tsc --noEmit -p tsconfig.src.json",
+    "build": "bun run --filter '@openthink/ui-leaf-cli' build",
+    "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
+    "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "tsup": "^8.4.0",
     "typescript": "^6.0.0"
-  },
-  "dependencies": {
-    "@rsbuild/core": "^2.0.1",
-    "@rsbuild/plugin-react": "^2.0.0",
-    "open": "^11.0.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5"
   }
 }

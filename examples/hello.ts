@@ -3,7 +3,7 @@
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mount } from "../src/index.ts";
+import { mount } from "../packages/cli/src/index.ts";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const viewsRoot = resolve(here, "../views");
