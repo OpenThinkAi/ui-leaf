@@ -78,11 +78,11 @@ Three reasons:
 
 ## How it works
 
-`mount()` spins up a local dev server (rsbuild + React under the hood), bundles your view file, injects the data into `window.__UI_LEAF__.data`, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered. Browser tab close → heartbeat stops → server shuts down → `view.closed` resolves and your CLI continues.
+`mount()` compiles your view file once with `Bun.build`, injects data into `window.__UI_LEAF__`, starts a `Bun.serve` HTTP server, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered. Browser tab close → heartbeat stops → server shuts down → `view.closed` resolves and your CLI continues.
 
-The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, and it's served inline in the HTML at `/index.html` — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch the page, grep the token out, and call `/mutate` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
+The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, served inline in the compiled HTML — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch `GET /`, grep the token out, and call `/mutate` or `/api/data` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
 
-The same trust boundary applies to the `data` you pass to `mount()`. The payload is JSON-inlined into `window.__UI_LEAF__.data` in the same `/index.html`, and is also written to `<tmpdir()>/ui-leaf-XXXXXX/index.html` on disk for the mount lifetime — readable by the same set of same-UID local processes that can read the token. For PHI, PCI, financial records, or anything else where a same-UID local reader is in your threat model, don't pass the sensitive payload through `data`; keep it in your CLI's memory and inject it into the view via an authenticated `connect-src 'self'` fetch on boot. See "Data-at-rest in the temp directory" below for the disk-residency details.
+The same trust boundary applies to the `data` you pass to `mount()`. The payload is JSON-inlined into `window.__UI_LEAF__.data` in the served HTML and held in memory for the mount lifetime — readable by the same set of same-UID local processes that can read the token. For PHI, PCI, financial records, or anything else where a same-UID local reader is in your threat model, use `dataLoader` instead — the loader's return value is served at a token-gated `/api/data` endpoint and never appears in the HTML. See "Data-at-rest" below for details.
 
 ## API surface
 
@@ -97,7 +97,7 @@ await mount({
   mutations,                                 // Record<string, MutationHandler> (optional)
   viewsRoot,                                 // optional, default: <cwd>/views
   title,                                     // optional, default: "ui-leaf"
-  port,                                      // optional, default: 5810 (auto-bumps if busy)
+  port,                                      // optional, default: 5810 (auto-bumps if busy; pass 0 for OS-assigned)
   openBrowser,                               // optional, default: true
   shell,                                     // optional, "tab" | "app", default: "tab"
   csp,                                       // optional, default: "off" (see Hardening)
@@ -130,7 +130,7 @@ mount({
 
 - **Locks `connect-src` to same-origin** — the architectural lock. Views cannot fetch external APIs; all data flows through `data` and `mutations`.
 - **Permits HTTPS images and fonts** so views can load CDN assets normally.
-- **Allows inline styles, eval, and inline scripts** for React + rsbuild's HMR.
+- **Allows inline styles and inline scripts** for React.
 
 Because the policy is sent as an HTTP response header, views cannot relax it at runtime. The only way to weaken the policy is to change the `mount()` call (i.e. fork the consumer CLI, not the view).
 
@@ -156,22 +156,22 @@ mount({
 
 Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or LAN hostnames you don't fully control.
 
-### Data-at-rest in the temp directory
+### Data-at-rest
 
-ui-leaf serialises the `data` you pass to `mount()` into `<tmpdir()>/ui-leaf-XXXXXX/index.html` so the dev server can serve it. The directory is created with `mode 0700` (readable only by the same UID), and ui-leaf removes it on `close()`, on `SIGINT`/`SIGTERM`, on uncaught throws via a `process.on('exit')` fallback, and opportunistically sweeps `ui-leaf-*` siblings older than 24h on every startup to catch anything that still slipped through.
+The `data` you pass to `mount()` is JSON-inlined into the compiled HTML that `GET /` serves, and held in memory for the mount lifetime. It is **not written to disk** — the compiled HTML exists only in process memory. A same-UID local process that can reach `127.0.0.1:<port>` can still recover the data by fetching `GET /` (no token required), so `data` is appropriate for routine payloads but not for PHI, PCI, or financial records where in-HTML exposure is in your threat model.
 
-What still leaks: `SIGKILL`, OOM-kill, and abrupt power loss skip every Node hook, so the directory stays on disk until the next `mount()` runs (the startup sweep) or the OS rotates `tmpdir()` (on macOS, only across reboots; on many Linux systems, only via `tmpfiles.d` age policies). If the data is sensitive enough that even that bounded window is too long, use `dataLoader` instead of `data`:
+For sensitive payloads use `dataLoader` instead of `data`:
 
 ```ts
 mount({
   view: "report",
   dataLoader: async () => {
-    return await db.fetchSensitiveRecords(); // stays in memory; never touches disk
+    return await db.fetchSensitiveRecords(); // stays in memory; never appears in HTML
   },
 });
 ```
 
-`dataLoader` invokes the function once at mount time, captures the result in-process, and serves it at a token-gated `GET /api/data` endpoint using the same per-launch token as `/mutate`. The view fetches `/api/data` on first render. Nothing is written to `index.html` or any tempdir file — the payload stays in memory for the entire mount lifetime. `data` remains the ergonomic default for routine payloads where disk residency is not a concern.
+`dataLoader` invokes the function once at mount time, captures the result in-process, and serves it at a token-gated `GET /api/data` endpoint using the same per-launch token as `/mutate`. The view fetches `/api/data` on first render. The payload never appears in the HTML — it can only be read by a caller that already has the token. Note that a local process that can fetch `GET /` (no auth) can still read the token from `window.__UI_LEAF__.token` and then call `/api/data` — so `dataLoader` hardens against HTML-level exposure, not against a determined same-UID reader.
 
 ## Sharing views across users
 
@@ -291,7 +291,7 @@ Each pending mutation has a unique `id`. Multiple mutations can be in flight con
 
 ### Driving from Node via `mount()` directly
 
-If your consumer is itself Node (or you want a thin in-process integration), use the SDK directly. Pass `silent: true` to suppress rsbuild output so you can keep stdout clean for your own protocol (capture `process.stdout.write` *before* calling `mount()`, since the option redirects stdout to stderr for the lifetime of the dev server):
+If your consumer is itself Node (or you want a thin in-process integration), use the SDK directly. Pass `silent: true` to redirect stdout to stderr for the lifetime of the server, keeping stdout clean for your own protocol (capture `process.stdout.write` *before* calling `mount()` if you need to write to real stdout from the same process):
 
 ```ts
 const realStdoutWrite = process.stdout.write.bind(process.stdout);

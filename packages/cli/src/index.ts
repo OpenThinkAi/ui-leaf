@@ -7,7 +7,7 @@ import {
   type CspOption,
   type MutationHandler,
   type Shell,
-} from "./dev-server.js";
+} from "./server.js";
 
 export type { CspOption, MutationHandler, Shell };
 
@@ -17,34 +17,30 @@ export interface MountOptions {
   /**
    * JSON-serializable data passed to the view as a prop.
    *
-   * Privacy caveat: ui-leaf serialises this payload into
-   * `<tmpdir()>/ui-leaf-XXXXXX/index.html` for the mount lifetime, and
-   * any same-UID local process that can reach `127.0.0.1:<port>` can
-   * fetch `/index.html` and read it — the per-launch token guards
-   * `/mutate` against drive-by cross-origin requests in the browser, not
-   * against other processes on the machine. For PHI, PCI, financial
-   * records, or anything else where a same-UID local reader is in your
-   * threat model, use `dataLoader` instead — the loader's return value
-   * is served at an authenticated `/api/data` endpoint and never written
-   * to disk. See the README section "Data-at-rest in the temp directory"
-   * and the `dataLoader` field below for details.
+   * Privacy note: the data is compiled into the HTML served at the mount URL
+   * and held in memory for the mount lifetime. Any same-UID local process
+   * that can reach `127.0.0.1:<port>` can fetch `GET /` and read it — the
+   * per-launch token guards `/mutate` against drive-by cross-origin requests
+   * in the browser, not against other processes on the machine. For PHI, PCI,
+   * financial records, or anything where a same-UID local reader is in your
+   * threat model, use `dataLoader` instead — the loader's return value is
+   * served at a token-gated `/api/data` endpoint and never appears in the HTML.
    */
   data?: unknown;
   /**
    * Async function that supplies sensitive data to the view without
-   * writing it to disk. When provided, the loader is called once during
-   * mount setup; its resolved value is served at a token-gated
-   * `GET /api/data` endpoint (same per-launch token as `/mutate`) and
-   * the view fetches it on first render before calling `createRoot().render()`.
+   * including it in the served HTML. When provided, the loader is called
+   * once during mount setup; its resolved value is served at a token-gated
+   * `GET /api/data` endpoint (same per-launch token as `/mutate`) and the
+   * view fetches it on first render before calling `createRoot().render()`.
+   * The data never appears in the compiled HTML.
    *
-   * Use this instead of `data` for PHI, PCI, financial records, or
-   * anything else where disk residency is in your threat model. `data`
-   * inlines the payload into `<tmpdir>/ui-leaf-XXXXXX/index.html` for
-   * the mount lifetime; `dataLoader` keeps it in memory only.
+   * Use this instead of `data` for PHI, PCI, financial records, or anything
+   * else where in-HTML data exposure is in your threat model.
    *
-   * Error semantics: if the loader rejects, the rejection propagates to
-   * the `mount()` caller (no automatic retry). Errors surface at mount
-   * time, matching the synchronous `data` path's behavior.
+   * Error semantics: if the loader rejects, the rejection propagates to the
+   * `mount()` caller (no automatic retry). Errors surface at mount time,
+   * matching the synchronous `data` path's behavior.
    *
    * Mutual exclusion: passing both `data` and `dataLoader` throws at
    * mount time.
@@ -75,6 +71,7 @@ export interface MountOptions {
    * Port to bind. Defaults to 5810 — unused by the major Node dev tools.
    * If the port is unavailable, ui-leaf bumps to the next free port and
    * the actual bound port is reflected on the returned `url` and `port`.
+   * Pass `0` to let the OS pick a free port directly.
    * Override only if you need a stable URL (e.g. an external bookmark).
    */
   port?: number;
@@ -126,8 +123,8 @@ export interface MountOptions {
    *   to same-origin (the architectural lock — views cannot fetch
    *   external APIs, so all data flows through `data` and `mutations`),
    *   while permitting common needs (HTTPS images / fonts, inline
-   *   styles for React, eval for rsbuild HMR). View files can only
-   *   *add* further restrictions via meta tag, never remove them.
+   *   styles for React). View files can only *add* further restrictions
+   *   via meta tag, never remove them.
    *
    * - `string` — raw CSP header value for full control. Use when the
    *   "strict" preset doesn't fit (e.g. you need `connect-src` to
@@ -154,25 +151,18 @@ export interface MountOptions {
    */
   allowedHosts?: string[];
   /**
-   * Suppress ui-leaf / rsbuild output to stdout. Default: false.
+   * Suppress ui-leaf output to stdout. Default: false.
    *
    * When you drive `mount()` programmatically — e.g. as part of a Node
    * bridge for a non-Node CLI that's spawned ui-leaf as a subprocess —
    * stdout is usually reserved for a structured protocol (line-delimited
-   * JSON, etc.). Without this option, rsbuild's banner and build messages
-   * collide with that protocol and silently corrupt it on the consumer
-   * side.
-   *
-   * Setting `silent: true`:
-   * - Sets rsbuild's logLevel to 'silent' (no banner, build, or
-   *   deprecation messages emitted by rsbuild)
-   * - Redirects `process.stdout.write` to `process.stderr` for the
-   *   lifetime of the dev server, restored on close
+   * JSON, etc.). Setting `silent: true` redirects `process.stdout.write`
+   * to `process.stderr` for the lifetime of the server, restored on close.
    *
    * Tradeoff: any other code in the same process that writes to stdout
-   * during the dev server's lifetime is also redirected. Hold the
-   * captured `process.stdout.write` reference yourself if you need to
-   * write to the *real* stdout from the same process.
+   * during the server's lifetime is also redirected. Hold the captured
+   * `process.stdout.write` reference yourself if you need to write to the
+   * real stdout from the same process.
    */
   silent?: boolean;
   /**
@@ -212,7 +202,7 @@ export interface MountedView {
  * shut down the CLI if a duplicate is still loaded.
  *
  * Ctrl+C: this function installs SIGINT and SIGTERM handlers that close
- * the dev server (and clean up its temp directory) before exiting.
+ * the server before exiting.
  */
 export async function mount(opts: MountOptions): Promise<MountedView> {
   const viewsRoot = opts.viewsRoot ?? resolve(process.cwd(), "views");
