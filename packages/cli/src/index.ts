@@ -108,12 +108,12 @@ export interface MountOptions {
    */
   signal?: AbortSignal;
   /**
-   * Browser silence (ms) that triggers shutdown after the startup grace
-   * window. Defaults to 75000 — chosen to survive a single browser
-   * background-tab throttle (browsers clamp setInterval in hidden tabs to
-   * roughly once per minute). Lower it if you want faster shutdown on tab
-   * close; raise it if your debugger pauses the page or your machine
-   * sleeps mid-session.
+   * Browser silence (ms) after which the mount emits `disconnected`.
+   * Defaults to 75000 — chosen to survive a single browser background-tab
+   * throttle (browsers clamp setInterval to ~60s in hidden tabs). Lower it
+   * for faster `disconnected` detection; raise it for sessions where the
+   * page may pause (debugger, machine sleep). Note: this no longer controls
+   * when the mount terminates — only when the `disconnected` event fires.
    */
   heartbeatTimeoutMs?: number;
   /**
@@ -221,16 +221,21 @@ export interface MountedView {
 /**
  * Mount a customizable browser view from a CLI. Spins up a local dev server
  * and renders the chosen view with the given data. Returns once the server
- * is ready; await `result.closed` to block until the user closes the
- * browser tab.
+ * is ready; await `result.closed` to block until the mount terminates.
  *
  * Mutations triggered in the view are dispatched to the registered handlers
  * here; the view never reaches the CLI's backing API directly.
  *
- * Multi-tab note: if the user opens the served URL in additional tabs (or
- * duplicates the tab), each tab heartbeats independently and the server
- * stays alive while *any* tab is open. Closing the original tab does not
- * shut down the CLI if a duplicate is still loaded.
+ * **Lifecycle.** Browser tab close (heartbeat silence) emits a `disconnected`
+ * event on `result` but does NOT resolve `closed` or stop the server. The
+ * mount only terminates — and `closed` resolves — when you call
+ * `result.close()`, receive SIGINT/SIGTERM, or an internal error occurs.
+ * Listen for `disconnected` and call `result.close()` yourself if you want
+ * fast shutdown on tab close.
+ *
+ * **Multi-tab note.** The heartbeat is a single high-water mark across all
+ * open tabs; `disconnected` fires only when all tabs go silent. Closing one
+ * tab while another is open emits no event.
  *
  * Ctrl+C: this function installs SIGINT and SIGTERM handlers that close
  * the server before exiting.
