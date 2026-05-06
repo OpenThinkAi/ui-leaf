@@ -237,7 +237,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
   <head>
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
-${cspMeta}    <!-- bootstrap injected by AGT-128 -->
+${cspMeta}    <!-- ui-leaf bootstrap -->
     <script>window.__UI_LEAF__ = { data: JSON.parse(${dataInline}) };</script>
   </head>
   <body>

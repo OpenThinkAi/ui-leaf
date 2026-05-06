@@ -17,7 +17,7 @@ describe("compileView", () => {
       expect(result.html).toContain("<!doctype html>");
       expect(result.html).toContain('<div id="root">');
       expect(result.html).toContain('<script type="module">');
-      expect(result.html).toContain("<!-- bootstrap injected by AGT-128 -->");
+      expect(result.html).toContain("<!-- ui-leaf bootstrap -->");
     },
     30_000,
   );
