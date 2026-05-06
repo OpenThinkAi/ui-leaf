@@ -24,4 +24,4 @@ export interface ViewProps<TData = unknown> {
  * Server-side mutation handler — what the CLI passes via mount({ mutations }).
  * Re-exported from the runtime entry so there's a single source of truth.
  */
-export type { MutationHandler } from "./dev-server.js";
+export type { MutationHandler } from "./server.js";

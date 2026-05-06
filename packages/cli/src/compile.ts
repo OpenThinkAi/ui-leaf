@@ -46,8 +46,8 @@ export interface CompileOptions {
   entry: string;
   /** Root directory holding .tsx view files. */
   viewsRoot: string;
-  /** JSON-serializable data injected as window.__UI_LEAF__.data. */
-  data: unknown;
+  /** JSON-serializable data injected as window.__UI_LEAF__.data. Ignored when dataLoader is true. */
+  data?: unknown;
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
   /**
@@ -58,9 +58,21 @@ export interface CompileOptions {
   /**
    * Extra allowed hostnames (beyond loopback defaults). Accepted in the
    * option bag for API symmetry with DevServerOptions; has no compile-time
-   * effect — the runtime DNS-rebinding gate lives in the dev server.
+   * effect — the runtime DNS-rebinding gate lives in the server.
    */
   allowedHosts?: string[];
+  /**
+   * Per-launch auth token. When provided, included as window.__UI_LEAF__.token
+   * so the browser-side bridge can authenticate /mutate and /heartbeat calls.
+   */
+  token?: string;
+  /**
+   * When true, generate an entry that fetches data from GET /api/data at
+   * render time rather than reading it from window.__UI_LEAF__.data. The
+   * compiled HTML bootstrap omits the data field (only token is included).
+   * Use when data is sensitive and must not be written to the HTML file.
+   */
+  dataLoader?: boolean;
 }
 
 export interface CompileResult {
@@ -77,6 +89,8 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
     csp,
     // allowedHosts has no compile-time effect; accepted for API symmetry.
     allowedHosts: _allowedHosts,
+    token,
+    dataLoader = false,
   } = opts;
 
   const viewsRootAbs = resolve(viewsRoot);
@@ -114,19 +128,13 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
   // Generate a temp entry that imports the resolved view, mounts React via
   // createRoot, and wires the mutation/heartbeat bridge. The view's default
   // export is a React component that cannot self-bootstrap (no createRoot
-  // call); this mirrors the existing dev-server.ts entry.tsx pattern.
+  // call); this mirrors the existing server.ts entry.tsx pattern.
   const tempDir = await mkdtemp(join(tmpdir(), "ui-leaf-compile-"));
   try {
     const entryPath = join(tempDir, "entry.tsx");
-    await writeFile(
-      entryPath,
-      `import { createRoot } from "react-dom/client";
-import View from ${JSON.stringify(viewAbs)};
 
-const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
-const data = ctx.data;
-const token = ctx.token;
-
+    // Shared bridge functions used in both entry variants.
+    const sharedBridge = `
 async function mutate(name: string, args?: unknown): Promise<unknown> {
   const res = await fetch("/mutate", {
     method: "POST",
@@ -159,13 +167,45 @@ async function heartbeat(): Promise<void> {
   } catch { /* server may have shut down; ignore */ }
 }
 setInterval(heartbeat, 5000);
-heartbeat();
+heartbeat();`;
+
+    const entryContent = dataLoader
+      ? `import { createRoot } from "react-dom/client";
+import View from ${JSON.stringify(viewAbs)};
+
+const ctx = (globalThis as { __UI_LEAF__?: { token?: string } }).__UI_LEAF__ ?? {};
+const token = ctx.token;
+${sharedBridge}
+
+async function bootstrap(): Promise<void> {
+  const res = await fetch("/api/data", {
+    headers: token ? { Authorization: "Bearer " + token } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
+  }
+  const data = await res.json();
+  const el = document.getElementById("root");
+  if (!el) throw new Error("ui-leaf: #root element missing");
+  createRoot(el).render(<View data={data} mutate={mutate} />);
+}
+bootstrap();
+`
+      : `import { createRoot } from "react-dom/client";
+import View from ${JSON.stringify(viewAbs)};
+
+const ctx = (globalThis as { __UI_LEAF__?: { data?: unknown; token?: string } }).__UI_LEAF__ ?? {};
+const data = ctx.data;
+const token = ctx.token;
+${sharedBridge}
 
 const el = document.getElementById("root");
 if (!el) throw new Error("ui-leaf: #root element missing");
 createRoot(el).render(<View data={data} mutate={mutate} />);
-`,
-    );
+`;
+
+    await writeFile(entryPath, entryContent);
 
     // Bun.build throws AggregateError on build failure (syntax errors,
     // unresolved imports, etc.) rather than returning { success: false }.
@@ -227,10 +267,14 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     // Double-stringify data: outer JSON.stringify produces a JSON string, then
     // escapeForScriptTag ensures </script> and U+2028/U+2029 can't break out.
     // The browser calls JSON.parse() on the embedded string — same pattern as
-    // dev-server.ts to avoid Annex B.3.1 prototype mutation via object literals.
-    const dataInline = escapeForScriptTag(
-      JSON.stringify(JSON.stringify(data ?? null)),
-    );
+    // server.ts to avoid Annex B.3.1 prototype mutation via object literals.
+    // Token is also passed through escapeForScriptTag so an arbitrary caller
+    // providing a non-hex token can't break out of the inline script.
+    const safeToken = token ? escapeForScriptTag(JSON.stringify(token)) : null;
+    const tokenField = safeToken ? `, token: ${safeToken}` : "";
+    const bootstrapValue = dataLoader
+      ? `{ token: ${safeToken ?? '""'} }`
+      : `{ data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))})${tokenField} }`;
 
     const html = `<!doctype html>
 <html lang="en">
@@ -238,7 +282,7 @@ createRoot(el).render(<View data={data} mutate={mutate} />);
     <meta charset="utf-8" />
     <title>${titleEscaped}</title>
 ${cspMeta}    <!-- ui-leaf bootstrap -->
-    <script>window.__UI_LEAF__ = { data: JSON.parse(${dataInline}) };</script>
+    <script>window.__UI_LEAF__ = ${bootstrapValue};</script>
   </head>
   <body>
     <div id="root"></div>

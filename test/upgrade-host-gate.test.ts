@@ -6,8 +6,7 @@ import { join } from "node:path";
 const VIEWS_ROOT = join(import.meta.dir, "fixtures");
 
 // Minimal RFC 6455 upgrade request. Sec-WebSocket-Key value is the canonical
-// example from the RFC; rsbuild won't accept this socket (no token query
-// param) but we never get that far — the Host gate runs first.
+// example from the RFC.
 function buildUpgradeRequest(host: string, path: string): string {
   return [
     `GET ${path} HTTP/1.1`,
@@ -21,26 +20,30 @@ function buildUpgradeRequest(host: string, path: string): string {
   ].join("\r\n");
 }
 
-// Send an upgrade request to 127.0.0.1:port and resolve with what happened
-// before either `timeoutMs` elapses or the server closes the socket.
+// Send an upgrade request to 127.0.0.1:port and resolve with the raw HTTP
+// response text received before either `timeoutMs` elapses or the server
+// closes the socket.
 function probeUpgrade(
   port: number,
   host: string,
   path: string,
   timeoutMs: number,
-): Promise<{ bytesReceived: number; closedByPeer: boolean }> {
+): Promise<{ responseText: string; closedByPeer: boolean }> {
   return new Promise((resolve) => {
     const sock = connect({ host: "127.0.0.1", port });
-    let bytesReceived = 0;
+    let responseText = "";
     let closedByPeer = false;
+    let settled = false;
     const settle = (): void => {
+      if (settled) return;
+      settled = true;
       sock.removeAllListeners();
       sock.destroy();
-      resolve({ bytesReceived, closedByPeer });
+      resolve({ responseText, closedByPeer });
     };
     sock.on("connect", () => sock.write(buildUpgradeRequest(host, path)));
     sock.on("data", (chunk) => {
-      bytesReceived += chunk.length;
+      responseText += (chunk as Buffer).toString("utf8");
     });
     sock.on("close", () => {
       closedByPeer = true;
@@ -51,7 +54,7 @@ function probeUpgrade(
   });
 }
 
-describe("HMR upgrade Host gate", () => {
+describe("upgrade Host gate", () => {
   test(
     "rejects WebSocket upgrade with non-loopback Host header",
     async () => {
@@ -65,17 +68,15 @@ describe("HMR upgrade Host gate", () => {
       });
 
       try {
-        // AC #2: attacker.example Host triggers our gate, which calls
-        // socket.destroy() before rsbuild's HMR handler ever reads or
-        // writes — so zero application bytes flow back.
+        // ui-leaf's DNS-rebinding gate intercepts the upgrade request before
+        // any routing and returns 403 when Host is not in the allowed set.
         const result = await probeUpgrade(
           view.port,
           "attacker.example",
-          "/rsbuild-hmr",
+          "/any-path",
           500,
         );
-        expect(result.closedByPeer).toBe(true);
-        expect(result.bytesReceived).toBe(0);
+        expect(result.responseText).toContain("HTTP/1.1 403");
       } finally {
         await view.close();
       }
@@ -84,7 +85,7 @@ describe("HMR upgrade Host gate", () => {
   );
 
   test(
-    "allows WebSocket upgrade with loopback Host header",
+    "does not reject WebSocket upgrade with loopback Host header",
     async () => {
       const view = await mount({
         view: "minimal",
@@ -96,19 +97,17 @@ describe("HMR upgrade Host gate", () => {
       });
 
       try {
-        // AC #3: with Host: 127.0.0.1, our gate must not destroy the
-        // socket. We probe a path rsbuild's HMR layer doesn't claim
-        // (`shouldHandle` returns false on path mismatch and rsbuild's
-        // handler bails silently), so any close inside the probe window
-        // would have to come from our gate. Holding the socket open for
-        // the full 250 ms window proves the gate let it through.
+        // With Host: 127.0.0.1, our gate must not fire. The response from
+        // Bun.serve (no WebSocket handler configured) will be some non-403
+        // status — proving the gate let the request through.
         const result = await probeUpgrade(
           view.port,
           "127.0.0.1",
-          "/not-rsbuild-hmr",
-          250,
+          "/any-path",
+          500,
         );
-        expect(result.closedByPeer).toBe(false);
+        expect(result.responseText).not.toContain("HTTP/1.1 403");
+        expect(result.responseText.length).toBeGreaterThan(0);
       } finally {
         await view.close();
       }
