@@ -24,13 +24,32 @@ export interface MountOptions {
    * `/mutate` against drive-by cross-origin requests in the browser, not
    * against other processes on the machine. For PHI, PCI, financial
    * records, or anything else where a same-UID local reader is in your
-   * threat model, do not pass the sensitive payload through `data`;
-   * keep it in memory in your CLI and inject it into the view via an
-   * authenticated `connect-src 'self'` fetch on boot. See the README
-   * sections "How it works" and "Data-at-rest in the temp directory"
-   * for the full framing.
+   * threat model, use `dataLoader` instead — the loader's return value
+   * is served at an authenticated `/api/data` endpoint and never written
+   * to disk. See the README section "Data-at-rest in the temp directory"
+   * and the `dataLoader` field below for details.
    */
-  data: unknown;
+  data?: unknown;
+  /**
+   * Async function that supplies sensitive data to the view without
+   * writing it to disk. When provided, the loader is called once during
+   * mount setup; its resolved value is served at a token-gated
+   * `GET /api/data` endpoint (same per-launch token as `/mutate`) and
+   * the view fetches it on first render before calling `createRoot().render()`.
+   *
+   * Use this instead of `data` for PHI, PCI, financial records, or
+   * anything else where disk residency is in your threat model. `data`
+   * inlines the payload into `<tmpdir>/ui-leaf-XXXXXX/index.html` for
+   * the mount lifetime; `dataLoader` keeps it in memory only.
+   *
+   * Error semantics: if the loader rejects, the rejection propagates to
+   * the `mount()` caller (no automatic retry). Errors surface at mount
+   * time, matching the synchronous `data` path's behavior.
+   *
+   * Mutual exclusion: passing both `data` and `dataLoader` throws at
+   * mount time.
+   */
+  dataLoader?: () => Promise<unknown>;
   /**
    * Mutation handlers the view can call via mutate(name, args).
    * Each handler can self-type its args and return:
@@ -201,6 +220,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
   const server = await startDevServer({
     view: opts.view,
     data: opts.data,
+    dataLoader: opts.dataLoader,
     viewsRoot,
     mutations: opts.mutations,
     title: opts.title,
