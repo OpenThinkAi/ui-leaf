@@ -91,7 +91,11 @@ describe("ipc.json — structural integrity", () => {
   test("every $defs entry has a version property referencing Version1", () => {
     const schema = JSON.parse(schemaRaw);
     const defs = schema["$defs"] as Record<string, unknown>;
-    const skip = new Set(["Version1", "InboundMessage", "OutboundMessage"]);
+    // SSE events are intentionally unversioned (no version field on the SSE frame).
+    const skip = new Set([
+      "Version1", "InboundMessage", "OutboundMessage",
+      "SseMessage", "SseDataUpdated", "SseViewSwapped", "SseClosing",
+    ]);
     for (const [name, def] of Object.entries(defs)) {
       if (skip.has(name)) continue;
       const d = def as { properties?: Record<string, unknown> };

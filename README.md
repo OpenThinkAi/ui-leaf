@@ -208,6 +208,8 @@ number if you need a fixed port (e.g. for an OS-registered URL handler).
 
 The binary exits 0 after `closed`, 1 on internal error.
 
+For the full field-by-field reference — including every message type, all optional fields, and SSE event payloads — see [`docs/ipc-protocol.md`](./docs/ipc-protocol.md).
+
 ### Tips for non-Node callers
 
 - **Pass `viewsRoot` as an absolute path.** No `cwd/views` default when invoked from
