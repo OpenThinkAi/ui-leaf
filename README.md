@@ -14,8 +14,8 @@ the **bring-your-own-view** part.
 ## Status
 
 `v1.0.0 — release in progress`. Binary architecture and stdio protocol are stable.
-JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). See
-[docs/design.md](./docs/design.md).
+JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). The
+full design doc (`docs/design.md`) ships alongside the binary release.
 
 ## Install
 
@@ -58,7 +58,7 @@ chmod +x ui-leaf && sudo mv ui-leaf /usr/local/bin/
 With v1.0.0, `npm install @openthink/ui-leaf` will install the thin JS wrapper;
 `postinstall` downloads and verifies the right binary for your platform automatically.
 Full JS wrapper API documentation lands with the publish-target swap. See
-[docs/design.md §6](./docs/design.md) for the planned API surface.
+the `docs/design.md §6` section (ships with v1.0.0) for the planned API surface.
 
 ```bash
 npm install @openthink/ui-leaf
@@ -75,9 +75,9 @@ emits events on stdout.
 
 ```bash
 # Read-only view — no mutations:
-CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
+CONFIG='{"version":"1","view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
 echo "$CONFIG" | ui-leaf mount
-# → {"version":"1","type":"ready","url":"http://127.0.0.1:54321","port":54321,"id":"..."}
+# → {"version":"1","type":"ready","url":"http://127.0.0.1:54321","port":54321}
 # (browser opens; user closes tab)
 # → {"version":"1","type":"disconnected"}
 # (mount stays alive; send {"version":"1","type":"close"} on stdin to terminate)
@@ -95,6 +95,7 @@ import json
 import sys
 
 config = {
+    "version": "1",
     "view": "spend",
     "viewsRoot": "/abs/path/to/views",
     "data": {"items": [], "totals": {}},
@@ -127,8 +128,8 @@ for line in proc.stdout:
 proc.wait()
 ```
 
-See [`examples/python/`](./examples/python/) for a fuller example, and
-[docs/ipc-protocol.md](./docs/ipc-protocol.md) for the complete message schema.
+See `examples/python/` (coming with v1.0.0) for a fuller example, and
+`docs/ipc-protocol.md` (coming with v1.0.0) for the complete message schema.
 
 ### Protocol overview
 
@@ -141,7 +142,9 @@ See [`examples/python/`](./examples/python/) for a fuller example, and
 | `{"version":"1","type":"error","id":N,"message":"..."}` | Error response to a `mutate` event |
 | `{"version":"1","type":"update","data":{}}` | Push new data to the running view |
 | `{"version":"1","type":"view","source":"...tsx"}` | Hot-swap the view source |
+| `{"version":"1","type":"patch","data":{},"view":{"source":"...tsx"}}` | Atomic data + view swap |
 | `{"version":"1","type":"reopen"}` | Re-launch the browser tab after a disconnect |
+| `{"version":"1","type":"ping"}` | Caller heartbeat (no reply emitted) |
 | `{"version":"1","type":"close"}` | Graceful shutdown |
 
 **stdout events (line-delimited JSON):**
@@ -152,7 +155,8 @@ See [`examples/python/`](./examples/python/) for a fuller example, and
 | `{"version":"1","type":"mutate","id":N,"name":"...","args":{}}` | View triggered a mutation — respond on stdin |
 | `{"version":"1","type":"disconnected"}` | Browser tab closed; mount stays alive |
 | `{"version":"1","type":"reconnected"}` | Browser tab re-opened |
-| `{"version":"1","type":"closed","reason":"caller\|signal\|natural"}` | Mount terminated — emitted once, last |
+| `{"version":"1","type":"view-swapped"}` | View recompile succeeded (follows `view` or `patch`) |
+| `{"version":"1","type":"closed","reason":"caller\|signal\|error"}` | Mount terminated — emitted once, last |
 | `{"version":"1","type":"error","phase":"build\|runtime","message":"..."}` | Build error (non-fatal) or runtime error (fatal) |
 
 The binary exits 0 after `closed`, 1 on internal error.
@@ -260,7 +264,7 @@ DNS names or LAN hostnames you don't fully control.
 - **SIGKILL data residency.** The tempdir survives SIGKILL until the next mount
   start or OS rotation. Documented limitation.
 
-See [docs/design.md §10](./docs/design.md) for the full security model.
+See `docs/design.md §10` _(coming with v1.0.0)_ for the full security model.
 
 ## Sharing views across users
 
@@ -319,13 +323,13 @@ The consumer CLI is responsible for (out of ui-leaf's scope):
 
 ## Further reading
 
-- [docs/design.md](./docs/design.md) — architecture deep-dive: repo layout, build
-  pipeline, versioning policy, security model
-- [docs/ipc-protocol.md](./docs/ipc-protocol.md) — full IPC message schema
+- `docs/design.md` _(coming with v1.0.0)_ — architecture deep-dive: repo layout,
+  build pipeline, versioning policy, security model
+- `docs/ipc-protocol.md` _(coming with v1.0.0)_ — full IPC message schema
   (generated from `packages/cli/schema/ipc.json`)
 - [examples/bash/counter.sh](./examples/bash/counter.sh) — runnable Bash example
   with mutation round-trip
-- [examples/python/](./examples/python/) — Python `subprocess` example
+- `examples/python/` _(coming with v1.0.0)_ — Python `subprocess` example
 
 ## License
 
