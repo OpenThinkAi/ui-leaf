@@ -44,13 +44,15 @@
     "README.md",
     "LICENSE"
   ],
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "examples/node"],
   "scripts": {
     "build": "bun run --filter '@openthink/ui-leaf-cli' build",
     "build:binaries": "bun run scripts/build-binaries.ts",
+    "build:wrapper": "bun run --filter '@openthink/ui-leaf-wrapper' build",
     "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
     "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
+    "smoke:examples": "bun run scripts/smoke-examples.ts",
     "generate:protocol-doc": "bun run scripts/generate-protocol-doc.ts",
     "check:protocol-doc": "bun run scripts/generate-protocol-doc.ts check",
     "prepublishOnly": "bun run build"
