@@ -49,6 +49,8 @@ binary executable:
 # macOS Apple Silicon example:
 curl -L -o ui-leaf \
   https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/ui-leaf-darwin-arm64
+curl -L -o checksums.txt \
+  https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/checksums.txt
 grep ui-leaf-darwin-arm64 checksums.txt | sha256sum -c
 chmod +x ui-leaf && sudo mv ui-leaf /usr/local/bin/
 ```
@@ -151,7 +153,7 @@ See `examples/python/` (coming with v1.0.0) for a fuller example, and
 
 | Event | When |
 |---|---|
-| `{"version":"1","type":"ready","url":"...","port":N,"id":"..."}` | Server is up — emitted once |
+| `{"version":"1","type":"ready","url":"...","port":N}` | Server is up — emitted once |
 | `{"version":"1","type":"mutate","id":N,"name":"...","args":{}}` | View triggered a mutation — respond on stdin |
 | `{"version":"1","type":"disconnected"}` | Browser tab closed; mount stays alive |
 | `{"version":"1","type":"reconnected"}` | Browser tab re-opened |
