@@ -23,6 +23,14 @@ full design doc (`docs/design.md`) ships alongside the binary release.
 > [npmjs.com/package/@openthink/ui-leaf](https://www.npmjs.com/package/@openthink/ui-leaf)
 > before v1.0.0 publishes. v1.0.0 replaces the SDK with a thin wrapper that spawns
 > the standalone binary.
+>
+> **Sensitive-data callers (PHI / PCI / financial records):** the v0.8.x SDK
+> exposes `dataLoader`, an in-memory alternative to `data` that serves the
+> payload at a token-gated `/api/data` endpoint instead of inlining it into the
+> served HTML. v0.8.x users with that requirement should reach for `dataLoader`
+> as documented in the in-tarball README. The v1.0.0 binary's data-update
+> channel uses the same in-memory + token-gated posture as a default; explicit
+> dataLoader docs ship with v1.0.0.
 
 ## Install
 
@@ -166,10 +174,11 @@ fragment via `history.replaceState`, and sends it as an `X-UI-Leaf-Token`
 header on subsequent `/mutate`, `/api/data`, and `/events` requests. A local
 process that fetches `GET /` cannot recover the token from the response body.
 
-**Default port.** When `port` is omitted from the config, the OS assigns a free
-port (equivalent to passing `port: 0`); the bound port is reported in the
-`ready` event. Pass an explicit number if you need a fixed port (e.g. for an
-OS-registered URL handler).
+**Default port.** When `port` is omitted from the config, the binary tries
+`5810` and auto-bumps if it's busy; the bound port is reported in the `ready`
+event. Pass `port: 0` if you want the OS to assign a free port directly
+(recommended for concurrent mounts to avoid collisions). Pass an explicit
+number if you need a fixed port (e.g. for an OS-registered URL handler).
 
 **stdin messages (line-delimited JSON):**
 

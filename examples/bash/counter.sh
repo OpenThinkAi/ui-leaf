@@ -46,7 +46,7 @@ COUNT=0
 # Build the initial config. `mutations: ["increment"]` declares the names
 # the view is allowed to call.
 read -r -d '' CONFIG <<EOF || true
-{"view":"demo","viewsRoot":"${VIEWS_ROOT}","data":{"initialCount":${COUNT}},"mutations":["increment"],"port":0,"heartbeatTimeoutMs":10000}
+{"version":"1","view":"demo","viewsRoot":"${VIEWS_ROOT}","data":{"initialCount":${COUNT}},"mutations":["increment"],"port":0,"heartbeatTimeoutMs":10000}
 EOF
 
 # Use coproc so we can both read from and write to the binary's stdio.
@@ -73,9 +73,9 @@ while IFS= read -r line <&"${UILEAF[0]}"; do
       if [ "$NAME" = "increment" ]; then
         COUNT=$((COUNT + BY))
         echo "[bash] mutation '${NAME}' by=${BY} → count=${COUNT}" >&2
-        echo "{\"type\":\"result\",\"id\":${ID},\"value\":{\"count\":${COUNT}}}" >&"${UILEAF[1]}"
+        echo "{\"version\":\"1\",\"type\":\"result\",\"id\":${ID},\"value\":{\"count\":${COUNT}}}" >&"${UILEAF[1]}"
       else
-        echo "{\"type\":\"error\",\"id\":${ID},\"message\":\"unknown mutation: ${NAME}\"}" >&"${UILEAF[1]}"
+        echo "{\"version\":\"1\",\"type\":\"error\",\"id\":${ID},\"message\":\"unknown mutation: ${NAME}\"}" >&"${UILEAF[1]}"
       fi
       ;;
     closed)
