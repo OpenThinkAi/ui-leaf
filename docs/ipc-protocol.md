@@ -117,6 +117,8 @@ Caller's response to a mutate request: success path. Correlated by id.
 
 Caller's response to a mutate request: error path. Correlated by id.
 
+> Note: distinct from `OutboundError`. This is a mutation reply correlated by `id`, not a stream-level error.
+
 **Example**
 
 ```json

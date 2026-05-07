@@ -6,9 +6,9 @@
  * Check: bun run check:protocol-doc   (exits 1 if committed file differs)
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ function renderType(prop: SchemaDef): string {
   return t;
 }
 
-/** Render constraints column: enum/const/min/max/pattern summary. */
+/** Render constraints column: min/max/pattern summary. */
 function renderConstraints(prop: SchemaDef): string {
   const parts: string[] = [];
   if (prop.minimum !== undefined) parts.push(`min: ${prop.minimum}`);
@@ -72,7 +72,8 @@ function renderConstraints(prop: SchemaDef): string {
 
 /** Build a one-line JSON example for a def. Discriminants resolve to their
  *  const; typed scalars get a sensible placeholder; free-form any-JSON fields
- *  show `<any JSON value>`. */
+ *  show a representative value. Pass isSse=true for nested objects and SSE
+ *  defs to suppress the top-level "version" field injection. */
 function buildExample(
   def: SchemaDef,
   defs: Record<string, SchemaDef>,
@@ -96,7 +97,8 @@ function buildExample(
     }
 
     if (!required.has(key) && key !== "type") {
-      // Skip optional fields in example unless it's important
+      // Allowlist of optional fields worth showing in examples.
+      // Extend when new optional fields should appear in generated examples.
       if (!["id", "name", "args", "value", "url", "port", "reason", "message", "data", "source", "view"].includes(key)) continue;
     }
 
@@ -117,7 +119,7 @@ function buildExample(
         if (key === "name") { ex[key] = "saveFile"; break; }
         if (key === "message") { ex[key] = "handler threw: file not found"; break; }
         if (key === "source") { ex[key] = "export default function View({name}){return <h1>{name}</h1>}"; break; }
-        ex[key] = `<string>`; break;
+        ex[key] = "<string>"; break;
       case "integer":
         if (key === "port") { ex[key] = 5810; break; }
         if (key === "id") { ex[key] = 1; break; }
@@ -127,13 +129,10 @@ function buildExample(
       case "array":
         ex[key] = ["<string>"]; break;
       case "object":
-        // Recurse into nested objects using their own properties
+        // Recurse into nested objects; pass isSse=true so the inner call
+        // never prepends a "version" field (version belongs only at the top level).
         if (resolved.properties) {
-          ex[key] = buildExample(resolved, defs, isSse);
-          // Remove spurious "version" key injected by recursive call for nested objects
-          if (typeof ex[key] === "object" && ex[key] !== null) {
-            delete (ex[key] as Record<string, unknown>)["version"];
-          }
+          ex[key] = buildExample(resolved, defs, /*isSse=*/true);
         } else {
           ex[key] = {};
         }
@@ -153,7 +152,6 @@ function buildExample(
 function buildFieldTable(
   def: SchemaDef,
   defs: Record<string, SchemaDef>,
-  isSse = false,
 ): string {
   const props = def.properties ?? {};
   const required = new Set(def.required ?? []);
@@ -190,6 +188,7 @@ function renderSection(
   defs: Record<string, SchemaDef>,
   level: number,
   isSse = false,
+  note?: string,
 ): string {
   const heading = "#".repeat(level);
   const lines: string[] = [];
@@ -202,7 +201,11 @@ function renderSection(
     lines.push("");
   }
 
-  // Example
+  if (note) {
+    lines.push(`> ${note}`);
+    lines.push("");
+  }
+
   lines.push("**Example**");
   lines.push("");
   lines.push("```json");
@@ -210,10 +213,9 @@ function renderSection(
   lines.push("```");
   lines.push("");
 
-  // Field table
   lines.push("**Fields**");
   lines.push("");
-  lines.push(buildFieldTable(def, defs, isSse));
+  lines.push(buildFieldTable(def, defs));
 
   return lines.join("\n");
 }
@@ -225,7 +227,6 @@ function renderSection(
 function generate(schema: IpcSchema): string {
   const defs = schema.$defs;
 
-  // Resolve which defs belong to which group
   const inboundRefs = (defs["InboundMessage"]?.oneOf ?? []).map((r) => refName(r.$ref));
   const outboundRefs = (defs["OutboundMessage"]?.oneOf ?? []).map((r) => refName(r.$ref));
   const sseRefs = (defs["SseMessage"]?.oneOf ?? []).map((r) => refName(r.$ref));
@@ -237,7 +238,6 @@ function generate(schema: IpcSchema): string {
   lines.push("<!-- Run `bun run generate:protocol-doc` to regenerate. -->");
   lines.push("");
 
-  // Title + top-level overview
   lines.push("# ui-leaf IPC Protocol Reference");
   lines.push("");
   lines.push("## Overview");
@@ -259,21 +259,19 @@ function generate(schema: IpcSchema): string {
   lines.push("```");
   lines.push("");
 
-  // Error semantics
   lines.push("**Error semantics:**");
   lines.push("");
   lines.push(
     "- `OutboundError` without a `phase` tag is **fatal**: the binary exits 1 after emitting it."
   );
   lines.push(
-    '- `OutboundError` with `phase:"build"` is **non-fatal**: the previous view is preserved and the mount stays alive.'
+    "- `OutboundError` with `phase:\"build\"` is **non-fatal**: the previous view is preserved and the mount stays alive."
   );
   lines.push(
-    '- `OutboundError` with `phase:"runtime"` is **fatal**: the binary exits 1.'
+    "- `OutboundError` with `phase:\"runtime\"` is **fatal**: the binary exits 1."
   );
   lines.push("");
 
-  // Versioning policy
   lines.push("## Versioning Policy");
   lines.push("");
   lines.push(
@@ -281,21 +279,27 @@ function generate(schema: IpcSchema): string {
     "to allow future alphanumeric identifiers."
   );
   lines.push("");
-  lines.push("**Additive changes (minor / non-breaking):** New optional fields on existing message types, " +
+  lines.push(
+    "**Additive changes (minor / non-breaking):** New optional fields on existing message types, " +
     "new message types added to a `oneOf`, new SSE event types. " +
-    "Callers that ignore unknown fields continue to work without modification.");
+    "Callers that ignore unknown fields continue to work without modification."
+  );
   lines.push("");
-  lines.push("**Breaking changes (new major version):** Removing or renaming required fields, " +
+  lines.push(
+    "**Breaking changes (new major version):** Removing or renaming required fields, " +
     "changing the meaning of an existing `type` discriminant, changing the version literal itself. " +
-    "A breaking change increments `version` (e.g. `\"2\"`) and is hosted at a new `$id` URI in the schema.");
+    "A breaking change increments `version` (e.g. `\"2\"`) and is hosted at a new `$id` URI in the schema."
+  );
   lines.push("");
-  lines.push("**SSE channel versioning:** SSE event payloads (`GET /events`) are unversioned — " +
+  lines.push(
+    "**SSE channel versioning:** SSE event payloads (`GET /events`) are unversioned — " +
     "no `version` field appears on the SSE frame. This is a known asymmetry: the SSE channel is " +
     "a server-push side channel for the browser, not part of the stdin/stdout IPC contract. " +
-    "Breaking SSE changes follow the same semver rules as the rest of the protocol.");
+    "Breaking SSE changes follow the same semver rules as the rest of the protocol."
+  );
   lines.push("");
 
-  // Config
+  // Config section
   lines.push("---");
   lines.push("");
   lines.push("## Inbound: Config (spawn config, stdin line 1)");
@@ -348,7 +352,13 @@ function generate(schema: IpcSchema): string {
   for (const ref of inboundRefs) {
     const def = defs[ref];
     if (!def) continue;
-    lines.push(renderSection(ref, def, defs, 3));
+    // Note on InboundMutateError: its type discriminant ("error") is shared with
+    // OutboundError, but the semantics are entirely different — this is a
+    // mutation reply correlated by id, not a stream-level error message.
+    const note = ref === "InboundMutateError"
+      ? "Note: distinct from `OutboundError`. This is a mutation reply correlated by `id`, not a stream-level error."
+      : undefined;
+    lines.push(renderSection(ref, def, defs, 3, false, note));
     lines.push("");
   }
 
@@ -403,20 +413,30 @@ const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as IpcSchema;
 const output = generate(schema);
 
 if (mode === "check") {
-  const tmp = outPath + ".tmp";
-  mkdirSync(dirname(tmp), { recursive: true });
-  writeFileSync(tmp, output, "utf8");
+  let committed: string;
   try {
-    execSync(`diff -u "${outPath}" "${tmp}"`, { stdio: "inherit" });
-    console.log("docs/ipc-protocol.md is up to date.");
+    committed = readFileSync(outPath, "utf8");
   } catch {
+    committed = "";
+  }
+  if (output === committed) {
+    console.log("docs/ipc-protocol.md is up to date.");
+  } else {
+    // Write tmp to os.tmpdir() so a Ctrl-C mid-check can't leave a stray
+    // .tmp file next to the committed artifact.
+    const tmp = resolve(tmpdir(), "ipc-protocol.md.tmp");
+    writeFileSync(tmp, output, "utf8");
+    try {
+      // Best-effort diff for human diagnostics; diff may not be on PATH on Windows.
+      const { execSync } = await import("node:child_process");
+      execSync(`diff -u "${outPath}" "${tmp}"`, { stdio: "inherit" });
+    } catch { /* diff exited 1 (differences found) — expected */ }
+    try { unlinkSync(tmp); } catch { /* ignore */ }
     console.error(
-      "\n[31mdocs/ipc-protocol.md is out of date.[0m\n" +
+      "\n\x1b[31mdocs/ipc-protocol.md is out of date.\x1b[0m\n" +
       "Run `bun run generate:protocol-doc` to regenerate it, then commit the result.\n"
     );
     process.exit(1);
-  } finally {
-    try { require("node:fs").unlinkSync(tmp); } catch { /* ignore */ }
   }
 } else {
   mkdirSync(dirname(outPath), { recursive: true });
