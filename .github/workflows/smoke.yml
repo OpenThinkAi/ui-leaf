@@ -119,12 +119,19 @@ jobs:
           // Resolve to an absolute path so spawn() finds the binary in cwd
           // regardless of whether it's on PATH.
           const binary = resolve(process.cwd(), process.argv[2]);
+
+          // Config for line 1 of stdin. Per the v1.0.0 protocol:
+          //   - `view` is the *name* (resolves to <viewsRoot>/<view>.tsx)
+          //   - `viewsRoot` is required and must be an absolute path
+          //   - `openBrowser: false` skips the OS browser launch (headless mode)
+          //   - no `type` field on the config line (config is line 1; only
+          //     subsequent stdin lines carry a `type`)
           const config = JSON.stringify({
             version: "1",
-            type: "mount",
-            view: "views/smoke.tsx",
+            view: "smoke",
+            viewsRoot: resolve(process.cwd(), "views"),
             data: { title: "smoke-ok" },
-            noOpen: true,
+            openBrowser: false,
             heartbeatTimeoutMs: 5000,
           });
 
@@ -231,17 +238,19 @@ jobs:
         run: |
           cat > smoke-wrapper/smoke.mjs << 'SCRIPT'
           import { mount } from '@openthink/ui-leaf';
+          import { resolve } from 'node:path';
 
           const handle = await mount({
-            view: './views/smoke.tsx',
+            view: 'smoke',
+            viewsRoot: resolve(process.cwd(), 'views'),
             data: { title: 'wrapper-smoke-ok' },
-            noOpen: true,
+            openBrowser: false,
             heartbeatTimeoutMs: 5000,
           });
 
           console.log('mounted, port:', handle.port);
 
-          await handle.update({ title: 'wrapper-mutated' });
+          await handle.update({ data: { title: 'wrapper-mutated' } });
           console.log('update OK');
 
           await handle.close();
