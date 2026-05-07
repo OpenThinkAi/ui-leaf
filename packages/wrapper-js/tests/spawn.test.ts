@@ -12,21 +12,27 @@ const MOCK_BINARY_TS = path.resolve(
   "mock-binary.ts",
 );
 
-// Build (once) a tiny POSIX shim that invokes `bun <mock-binary>` and
-// forwards stdio. spawnUiLeaf passes "mount" as argv[1]; the shim ignores
-// extra args (mock-binary doesn't discriminate by subcommand).
+// Build (once) a shim that invokes `bun <mock-binary>` and forwards stdio.
+// spawnUiLeaf passes "mount" as argv[1]; the shim ignores extra args.
+// On Windows, a .cmd file is used — Bun 1.1+ spawns .cmd files natively.
 let shimPath: string | null = null;
 function getMockBinaryShim(): string {
   if (shimPath) return shimPath;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-leaf-mock-"));
-  const shim = path.join(dir, "ui-leaf");
-  fs.writeFileSync(
-    shim,
-    `#!/bin/sh\nexec bun ${JSON.stringify(MOCK_BINARY_TS)} "$@"\n`,
-    { mode: 0o755 },
-  );
-  shimPath = shim;
-  return shim;
+  if (process.platform === "win32") {
+    const shim = path.join(dir, "ui-leaf.cmd");
+    fs.writeFileSync(shim, `@echo off\nbun ${JSON.stringify(MOCK_BINARY_TS)} %*\r\n`);
+    shimPath = shim;
+  } else {
+    const shim = path.join(dir, "ui-leaf");
+    fs.writeFileSync(
+      shim,
+      `#!/bin/sh\nexec bun ${JSON.stringify(MOCK_BINARY_TS)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    shimPath = shim;
+  }
+  return shimPath;
 }
 
 function spawnMockViaBun(opts: {
@@ -275,6 +281,37 @@ describe("forward-compat", () => {
     const types = seen.map((e) => e.type);
     expect(types).toContain("ready");
     expect(types).toContain("future-event");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #2/#3: malformed stdout — non-JSON line surfaces as error event, no crash
+// ---------------------------------------------------------------------------
+describe("malformed stdout handling", () => {
+  test("non-JSON line from binary surfaces as synthetic error event and does not crash", async () => {
+    const errors: OutboundMessage[] = [];
+    const handle = spawnMockViaBun({
+      script: [
+        { kind: "emit", msg: { version: "1", type: "ready", url: "u", port: 1 } },
+        { kind: "raw", text: "this is not valid json at all" },
+        { kind: "wait-for", type: "close", timeoutMs: 5000 },
+        { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
+        { kind: "exit", code: 0 },
+      ],
+    });
+    handle.onEvent((e) => {
+      if (e.type === "error") errors.push(e);
+    });
+    await handle.ready;
+    // Give the raw line time to arrive.
+    await new Promise((r) => setTimeout(r, 50));
+    handle.send({ version: "1", type: "close" });
+    await handle.exited;
+    expect(errors.length).toBeGreaterThan(0);
+    const e0 = errors[0]!;
+    expect(e0.type).toBe("error");
+    // OutboundError is the only member of OutboundMessage with `message`.
+    expect((e0 as { type: "error"; message: string }).message).toContain("malformed JSON");
   });
 });
 

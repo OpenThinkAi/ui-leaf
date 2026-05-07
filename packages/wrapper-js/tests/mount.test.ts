@@ -19,20 +19,26 @@ const MOCK_BINARY_TS = path.resolve(
   "mock-binary.ts",
 );
 
-// Build (once) a tiny POSIX shim that invokes `bun <mock-binary>` and
-// forwards stdio. Identical pattern to spawn.test.ts.
+// Build (once) a shim that invokes `bun <mock-binary>` and forwards stdio.
+// Identical pattern to spawn.test.ts. On Windows, a .cmd file is used.
 let shimPath: string | null = null;
 function getMockBinaryShim(): string {
   if (shimPath) return shimPath;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-leaf-mount-mock-"));
-  const shim = path.join(dir, "ui-leaf");
-  fs.writeFileSync(
-    shim,
-    `#!/bin/sh\nexec bun ${JSON.stringify(MOCK_BINARY_TS)} "$@"\n`,
-    { mode: 0o755 },
-  );
-  shimPath = shim;
-  return shim;
+  if (process.platform === "win32") {
+    const shim = path.join(dir, "ui-leaf.cmd");
+    fs.writeFileSync(shim, `@echo off\nbun ${JSON.stringify(MOCK_BINARY_TS)} %*\r\n`);
+    shimPath = shim;
+  } else {
+    const shim = path.join(dir, "ui-leaf");
+    fs.writeFileSync(
+      shim,
+      `#!/bin/sh\nexec bun ${JSON.stringify(MOCK_BINARY_TS)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    shimPath = shim;
+  }
+  return shimPath;
 }
 
 type MockStep =
@@ -420,5 +426,94 @@ describe("exit before ready", () => {
         { kind: "exit", code: 1 },
       ]),
     ).rejects.toThrow(/binary exited/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #2: build error on initial mount — binary emits error+closed before ready
+// ---------------------------------------------------------------------------
+
+describe("build error before ready", () => {
+  test("mount() rejects when binary emits build error and exits before ready", async () => {
+    await expect(
+      mountMock([
+        { kind: "emit", msg: { version: "1", type: "error", phase: "build", message: "TSX compile failed" } },
+        { kind: "emit", msg: { version: "1", type: "closed", reason: "error" } },
+        { kind: "exit", code: 1 },
+      ]),
+    ).rejects.toThrow(/binary exited/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #2: multiple in-flight mutations — id-pairing verified via handler args
+// ---------------------------------------------------------------------------
+
+describe("multiple in-flight mutations", () => {
+  test("two concurrent mutations are both dispatched and results returned", async () => {
+    const dispatched: number[] = [];
+    const view = await mountMock(
+      [
+        { kind: "emit", msg: { version: "1", type: "ready", url: "u", port: 1 } },
+        { kind: "emit", msg: { version: "1", type: "mutate", id: 1, name: "work", args: 10 } },
+        { kind: "emit", msg: { version: "1", type: "mutate", id: 2, name: "work", args: 20 } },
+        { kind: "wait-for", type: "result", timeoutMs: 5000 },
+        { kind: "wait-for", type: "result", timeoutMs: 5000 },
+        { kind: "wait-for", type: "close", timeoutMs: 5000 },
+        { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
+        { kind: "exit", code: 0 },
+      ],
+      {
+        mutations: {
+          work: async (args) => {
+            dispatched.push(args as number);
+            return (args as number) * 2;
+          },
+        },
+      },
+    );
+    await view.close();
+    // Both mutations were dispatched; protocol does not guarantee ordering.
+    expect([...dispatched].sort((a, b) => a - b)).toEqual([10, 20]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #2: slow startup — mount() resolves even when ready is delayed
+// ---------------------------------------------------------------------------
+
+describe("slow startup", () => {
+  test("mount() resolves when the binary delays ready by 200ms", async () => {
+    const view = await mountMock([
+      { kind: "emit", msg: { version: "1", type: "ready", url: "http://127.0.0.1:9001/", port: 9001 }, delayMs: 200 },
+      { kind: "wait-for", type: "close", timeoutMs: 5000 },
+      { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
+      { kind: "exit", code: 0 },
+    ]);
+    expect(typeof view.id).toBe("string");
+    expect(view.port).toBe(9001);
+    await view.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #2: disconnect → reconnect cycle — both handlers fire in sequence
+// ---------------------------------------------------------------------------
+
+describe("disconnect/reconnect cycle", () => {
+  test("onDisconnect then onReconnect fire in order", async () => {
+    const events: string[] = [];
+    const view = await mountMock(readyThenClose([
+      { kind: "emit", msg: { version: "1", type: "disconnected" }, delayMs: 30 },
+      { kind: "emit", msg: { version: "1", type: "reconnected" }, delayMs: 30 },
+    ]));
+    view.onDisconnect(() => events.push("disconnected"));
+    view.onReconnect(() => events.push("reconnected"));
+    // Wait long enough for both events to arrive (2× 30ms delay + margin).
+    await new Promise((r) => setTimeout(r, 200));
+    await view.close();
+    expect(events).toContain("disconnected");
+    expect(events).toContain("reconnected");
+    expect(events.indexOf("disconnected")).toBeLessThan(events.indexOf("reconnected"));
   });
 });

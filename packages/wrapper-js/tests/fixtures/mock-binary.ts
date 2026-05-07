@@ -41,7 +41,14 @@ type WaitStep = {
   delayMs?: number;
 };
 
-type Step = EmitStep | ExitStep | StderrStep | WaitStep;
+/** Write an arbitrary raw text line to stdout (useful for emitting malformed JSON in tests). */
+type RawStep = {
+  kind: "raw";
+  text: string;
+  delayMs?: number;
+};
+
+type Step = EmitStep | ExitStep | StderrStep | WaitStep | RawStep;
 
 type MockScript = Step[];
 
@@ -130,6 +137,8 @@ async function runScript(): Promise<void> {
       emitLine(step.msg, step.splitAfter);
     } else if (step.kind === "stderr") {
       process.stderr.write(step.text);
+    } else if (step.kind === "raw") {
+      process.stdout.write(`${step.text}\n`);
     } else if (step.kind === "exit") {
       await flushStdout();
       process.exit(step.code);
