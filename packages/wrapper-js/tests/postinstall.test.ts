@@ -194,7 +194,7 @@ async function makePackageRoot(version = "0.0.1"): Promise<string> {
   // Minimal package.json the postinstall reads for version
   await fsp.writeFile(
     path.join(dir, "package.json"),
-    JSON.stringify({ name: "@openthink/ui-leaf-wrapper", version }),
+    JSON.stringify({ name: "@openthink/ui-leaf", version }),
     "utf8"
   );
   return dir;

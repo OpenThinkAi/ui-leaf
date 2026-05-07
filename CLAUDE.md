@@ -11,21 +11,23 @@ post-receive hook (`.stamp/mirror.yml`). All merges to `main` go through
 
 ## Releases
 
-Releases are gated by **`package.json.version`**, not git tags. The
-`.github/workflows/publish.yml` workflow runs on every push to `main`, but
+Releases are gated by **`packages/wrapper-js/package.json` version**, not git tags.
+The `.github/workflows/publish.yml` workflow runs on every push to `main`, but
 its `publish` job only fires when `npm view @openthink/ui-leaf@<version>` reports
 that version is not yet on the registry. Non-bump merges no-op safely.
 
+The root `package.json` is a private workspace shell with no `version` field —
+only `packages/wrapper-js/package.json` is the published manifest.
+
 To cut a release:
 
-1. Branch off `main` as `release/vX.Y.Z` (e.g. `release/v0.2.2`).
-2. Bump `package.json` `version` to `X.Y.Z`. Pick the next patch by
-   default; use minor when the change adds public surface (new exports,
-   new CLI flags, new MountOption keys), and major for breaking changes
-   to the bridge protocol, the `mount()` API, or the stdio JSON
-   protocol.
-3. Run `bun install` to refresh `bun.lock` (the root-package metadata
-   embeds the version, so the lockfile updates).
+1. Branch off `main` as `release/vX.Y.Z` (e.g. `release/v1.0.1`).
+2. Bump `packages/wrapper-js/package.json` `version` to `X.Y.Z`. Pick the next
+   patch by default; use minor when the change adds public surface (new exports,
+   new CLI flags, new MountOption keys), and major for breaking changes to the
+   bridge protocol, the `mount()` API, or the stdio JSON protocol.
+3. Run `bun install` to refresh `bun.lock` (the workspace metadata embeds the
+   version, so the lockfile updates).
 4. Commit on the release branch — typical message: `release: vX.Y.Z`.
 5. Run `stamp review --diff main..release/vX.Y.Z` and `stamp status` to
    open the gate.

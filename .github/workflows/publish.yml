@@ -13,8 +13,9 @@ name: Publish to npm
 # published tarball, verifiable via `npm audit signatures`.
 #
 # Manual re-run: `workflow_dispatch` re-publishes whatever's in
-# package.json on the default branch — useful for recovering from a
-# Trusted Publisher misconfig without burning another version bump.
+# packages/wrapper-js/package.json on the default branch — useful for
+# recovering from a Trusted Publisher misconfig without burning another
+# version bump.
 #
 # Partial-publish recovery:
 #   Binaries uploaded but npm failed → re-trigger via workflow_dispatch.
@@ -26,13 +27,6 @@ name: Publish to npm
 #   workflow_dispatch. The npm gate sees the version already on npm and
 #   skips the publish job; the release job re-runs and updates the GH
 #   Release.
-#
-# TODO (F6): Once AGT-133–135 ship wrapper-js source, switch the npm
-# publish target from the root package to packages/wrapper-js. Update
-# `files` in packages/wrapper-js/package.json, drop `prepublishOnly`
-# from root package.json, and reconfigure the npm Trusted Publisher
-# binding at https://www.npmjs.com/package/@openthink/ui-leaf/access to
-# point at the wrapper-js package name.
 
 on:
   push:
@@ -57,12 +51,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read version from package.json
+      - name: Read version from packages/wrapper-js/package.json
         id: version
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION=$(node -p "require('./packages/wrapper-js/package.json').version")
           if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "could not read @openthink/ui-leaf version from package.json" >&2
+            echo "could not read @openthink/ui-leaf version from packages/wrapper-js/package.json" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -163,13 +157,15 @@ jobs:
           bun-version: 1.3.13
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        # UI_LEAF_SKIP_DOWNLOAD=1 prevents wrapper-js postinstall from trying to
+        # download a binary from a GH Release that may not exist yet in CI.
+        run: UI_LEAF_SKIP_DOWNLOAD=1 bun install --frozen-lockfile
 
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Build
-        run: bun run build
+      - name: Build wrapper
+        run: bun run build:wrapper
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -198,4 +194,5 @@ jobs:
       # configured at https://www.npmjs.com/package/@openthink/ui-leaf/access
       # pointing at this repo + workflow file. No NPM_TOKEN secret needed.
       - name: Publish
+        working-directory: packages/wrapper-js
         run: npm publish --provenance --access public --tag ${{ needs.plan.outputs.npm_tag }}

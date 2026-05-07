@@ -1,8 +1,29 @@
 {
-  "name": "@openthink/ui-leaf-wrapper",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@openthink/ui-leaf",
+  "version": "1.0.0-rc.1",
+  "description": "Customizable browser views, on demand, for any CLI.",
+  "license": "MIT",
+  "author": "Matt Pardini",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenThinkAi/ui-leaf.git",
+    "directory": "packages/wrapper-js"
+  },
+  "homepage": "https://github.com/OpenThinkAi/ui-leaf",
+  "bugs": "https://github.com/OpenThinkAi/ui-leaf/issues",
+  "keywords": [
+    "cli",
+    "ui",
+    "browser",
+    "byov",
+    "local-first",
+    "views",
+    "dashboard"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -14,7 +35,7 @@
   "scripts": {
     "build": "tsup",
     "postinstall": "node ./run-postinstall.cjs",
-    "prepack": "node -e \"require('node:fs').copyFileSync('bin/ui-leaf-bin.stub','bin/ui-leaf-bin')\""
+    "prepack": "node -e \"const fs=require('node:fs');fs.copyFileSync('bin/ui-leaf-bin.stub','bin/ui-leaf-bin');fs.copyFileSync('../../README.md','README.md');fs.copyFileSync('../../LICENSE','LICENSE')\""
   },
   "bin": {
     "ui-leaf": "./bin/ui-leaf"
@@ -22,7 +43,9 @@
   "files": [
     "dist",
     "bin",
-    "run-postinstall.cjs"
+    "run-postinstall.cjs",
+    "README.md",
+    "LICENSE"
   ],
   "devDependencies": {
     "tsup": "^8.4.0"

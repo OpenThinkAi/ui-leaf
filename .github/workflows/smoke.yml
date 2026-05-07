@@ -1,0 +1,296 @@
+name: Smoke test
+
+# Triggered manually after a prerelease publishes to GH Releases + npm.
+# Runs on all five supported platforms; validates the binary, the JS wrapper
+# postinstall, and a headless mount round-trip via stdin IPC (no token needed).
+#
+# Usage:
+#   1. Wait for the publish workflow to complete for the version you want to test.
+#   2. Go to Actions → Smoke test → Run workflow.
+#   3. Enter the version (e.g. 1.0.0-rc.1) and the npm tag (e.g. next or latest).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to smoke-test (e.g. 1.0.0-rc.1)"
+        required: true
+      npm_tag:
+        description: "npm dist-tag to install from (e.g. next or latest)"
+        required: true
+        default: "next"
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    name: Binary — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            artifact: ui-leaf-darwin-arm64
+            binary: ui-leaf-bin
+          - os: macos-13
+            artifact: ui-leaf-darwin-x64
+            binary: ui-leaf-bin
+          - os: ubuntu-22.04
+            artifact: ui-leaf-linux-x64
+            binary: ui-leaf-bin
+          - os: ubuntu-22.04-arm
+            artifact: ui-leaf-linux-arm64
+            binary: ui-leaf-bin
+          - os: windows-2022
+            artifact: ui-leaf-windows-x64.exe
+            binary: ui-leaf-bin.exe
+    steps:
+      - name: Download checksums
+        shell: bash
+        run: |
+          curl -fsSL \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/checksums.txt" \
+            -o checksums.txt
+          cat checksums.txt
+
+      - name: Download binary
+        shell: bash
+        run: |
+          curl -fsSL \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/${{ matrix.artifact }}" \
+            -o "${{ matrix.binary }}"
+
+      - name: Verify SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED=$(grep "${{ matrix.artifact }}" checksums.txt | awk '{print $1}')
+          if [ -z "$EXPECTED" ]; then
+            echo "No checksum entry for ${{ matrix.artifact }}" >&2
+            exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            ACTUAL=$(sha256sum "${{ matrix.binary }}" | awk '{print $1}')
+          else
+            # macOS ships shasum, not sha256sum
+            ACTUAL=$(shasum -a 256 "${{ matrix.binary }}" | awk '{print $1}')
+          fi
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "SHA256 mismatch: expected $EXPECTED, got $ACTUAL" >&2
+            exit 1
+          fi
+          echo "SHA256 OK: $ACTUAL"
+
+      - name: Make executable (POSIX)
+        if: runner.os != 'Windows'
+        run: chmod +x "${{ matrix.binary }}"
+
+      - name: Smoke — help
+        shell: bash
+        run: ./${{ matrix.binary }} --help
+
+      - name: Setup Node 22 (for IPC driver script)
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Write smoke view
+        shell: bash
+        run: |
+          mkdir -p views
+          cat > views/smoke.tsx << 'TSX'
+          export default function Smoke({ title }: { title: string }) {
+            return <div id="smoke-title">{title}</div>;
+          }
+          TSX
+
+      - name: Smoke — headless mount round-trip (stdin IPC)
+        shell: bash
+        run: |
+          # Node driver script: spawns binary, sends config + update + close via
+          # stdin IPC. No token needed — stdin is the trusted parent channel.
+          node --input-type=module - "${{ matrix.binary }}" << 'DRIVER'
+          import { spawn } from "node:child_process";
+          import { createInterface } from "node:readline";
+          import { resolve } from "node:path";
+
+          // Resolve to an absolute path so spawn() finds the binary in cwd
+          // regardless of whether it's on PATH.
+          const binary = resolve(process.cwd(), process.argv[2]);
+          const config = JSON.stringify({
+            version: "1",
+            type: "mount",
+            view: "views/smoke.tsx",
+            data: { title: "smoke-ok" },
+            noOpen: true,
+            heartbeatTimeoutMs: 5000,
+          });
+
+          const child = spawn(binary, ["mount"], { stdio: ["pipe", "pipe", "inherit"] });
+          const rl = createInterface({ input: child.stdout });
+
+          let ready = false;
+          let updateSent = false;
+          let closeSent = false;
+          let closed = false;
+
+          // Hard timeout — cancelled on the success path so it never fires false-positive.
+          const hardTimeout = setTimeout(() => {
+            console.error("timeout: mount did not close within 30s");
+            child.kill();
+            process.exit(1);
+          }, 30000);
+
+          rl.on("line", (line) => {
+            let event;
+            try { event = JSON.parse(line); } catch { return; }
+
+            if (event.type === "ready" && !ready) {
+              ready = true;
+              console.log("ready on port", event.port);
+              // Send update via stdin
+              child.stdin.write(
+                JSON.stringify({ version: "1", type: "update", data: { title: "mutated" } }) + "\n"
+              );
+              updateSent = true;
+              // Close after a short delay so the update can be processed
+              setTimeout(() => {
+                child.stdin.write(JSON.stringify({ version: "1", type: "close" }) + "\n");
+                closeSent = true;
+              }, 500);
+            }
+
+            if (event.type === "closed") {
+              closed = true;
+              console.log("closed event OK");
+              rl.close();
+            }
+
+            if (event.type === "error") {
+              console.error("mount error:", event.message);
+              child.kill();
+              process.exit(1);
+            }
+          });
+
+          // Send config as first stdin line
+          child.stdin.write(config + "\n");
+
+          child.on("exit", (code) => {
+            if (!ready) { console.error("binary exited before ready"); process.exit(1); }
+            if (!updateSent) { console.error("update was never sent"); process.exit(1); }
+            if (!closeSent) { console.error("close was never sent"); process.exit(1); }
+            if (!closed) { console.error("no closed event received"); process.exit(1); }
+            clearTimeout(hardTimeout);
+            console.log("smoke PASSED (binary exit code:", code, ")");
+            process.exit(0);
+          });
+          DRIVER
+
+  wrapper:
+    name: JS wrapper — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+          - os: ubuntu-22.04
+          - os: windows-2022
+    steps:
+      - name: Setup Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install from npm
+        shell: bash
+        run: |
+          mkdir smoke-wrapper && cd smoke-wrapper
+          npm install "@openthink/ui-leaf@${{ inputs.npm_tag }}"
+
+      - name: Verify binary was downloaded
+        shell: bash
+        run: |
+          ls -la smoke-wrapper/node_modules/@openthink/ui-leaf/bin/
+
+      - name: Write wrapper smoke view
+        shell: bash
+        run: |
+          mkdir -p smoke-wrapper/views
+          cat > smoke-wrapper/views/smoke.tsx << 'TSX'
+          export default function Smoke({ title }: { title: string }) {
+            return <div id="smoke-title">{title}</div>;
+          }
+          TSX
+
+      - name: Run Node wrapper smoke script
+        shell: bash
+        run: |
+          cat > smoke-wrapper/smoke.mjs << 'SCRIPT'
+          import { mount } from '@openthink/ui-leaf';
+
+          const handle = await mount({
+            view: './views/smoke.tsx',
+            data: { title: 'wrapper-smoke-ok' },
+            noOpen: true,
+            heartbeatTimeoutMs: 5000,
+          });
+
+          console.log('mounted, port:', handle.port);
+
+          await handle.update({ title: 'wrapper-mutated' });
+          console.log('update OK');
+
+          await handle.close();
+          console.log('closed OK');
+          SCRIPT
+
+          cd smoke-wrapper && node smoke.mjs
+
+      - name: SHA256 tamper check
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG_DIR="smoke-wrapper/node_modules/@openthink/ui-leaf"
+
+          # Confirm the postinstall entrypoint exists before relying on it to fail
+          if [ ! -f "$PKG_DIR/run-postinstall.cjs" ]; then
+            echo "ERROR: run-postinstall.cjs not found — layout has changed, tamper check invalid" >&2
+            exit 1
+          fi
+
+          # Remove the sentinel so postinstall re-verifies rather than skipping
+          SENTINEL="$PKG_DIR/bin/.ui-leaf-version"
+          rm -f "$SENTINEL"
+
+          # Corrupt the downloaded binary
+          CORRUPTED=""
+          for f in "$PKG_DIR/bin/ui-leaf-bin" "$PKG_DIR/bin/ui-leaf-bin.exe"; do
+            if [ -f "$f" ]; then
+              echo "CORRUPTED" > "$f"
+              CORRUPTED="$f"
+              break
+            fi
+          done
+
+          if [ -z "$CORRUPTED" ]; then
+            echo "ERROR: no binary found at expected paths — layout has changed, tamper check invalid" >&2
+            exit 1
+          fi
+
+          # postinstall must exit non-zero and mention "SHA256 mismatch"
+          if cd "$PKG_DIR" && node ./run-postinstall.cjs 2>&1 | tee /tmp/postinstall-out.txt; then
+            echo "ERROR: postinstall succeeded on a tampered binary — SHA256 check is not working" >&2
+            exit 1
+          fi
+
+          if ! grep -qi "sha256\|mismatch\|checksum" /tmp/postinstall-out.txt; then
+            echo "ERROR: postinstall failed but without a SHA256/mismatch/checksum message — unexpected failure mode" >&2
+            cat /tmp/postinstall-out.txt >&2
+            exit 1
+          fi
+
+          echo "Tamper check OK — postinstall correctly rejected the corrupted binary"
