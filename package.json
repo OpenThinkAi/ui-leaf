@@ -51,6 +51,8 @@
     "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
     "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
+    "generate:protocol-doc": "bun run scripts/generate-protocol-doc.ts",
+    "check:protocol-doc": "bun run scripts/generate-protocol-doc.ts check",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {

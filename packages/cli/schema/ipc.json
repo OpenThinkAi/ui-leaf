@@ -373,6 +373,61 @@
         { "$ref": "#/$defs/OutboundError" },
         { "$ref": "#/$defs/OutboundViewSwapped" }
       ]
+    },
+    "SseDataUpdated": {
+      "description": "SSE event broadcast to all connected browser tabs when in-memory data is replaced (via InboundUpdate or InboundPatch). The browser view should re-render with the new data.",
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "data-updated",
+          "description": "Discriminant: data-updated SSE event."
+        },
+        "data": {
+          "description": "The new data object passed to the view as props (any JSON value, including null)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SseViewSwapped": {
+      "description": "SSE event broadcast to all connected browser tabs after a successful view recompile (via InboundView or InboundPatch). The browser performs a full page reload to pick up the new view bundle.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "view-swapped",
+          "description": "Discriminant: view-swapped SSE event."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SseClosing": {
+      "description": "SSE event broadcast to all connected browser tabs immediately before the HTTP server stops. The browser can use this to show a 'mount closed' overlay.",
+      "type": "object",
+      "required": ["type", "reason"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "closing",
+          "description": "Discriminant: closing SSE event."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["caller", "signal", "error"],
+          "description": "Why the mount is closing: caller sent close, OS signal received, or unrecoverable error."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SseMessage": {
+      "description": "Any valid SSE event payload broadcast on GET /events. SSE frames are unversioned (no version field); the event stream is a server-push channel, not part of the stdin/stdout IPC.",
+      "oneOf": [
+        { "$ref": "#/$defs/SseDataUpdated" },
+        { "$ref": "#/$defs/SseViewSwapped" },
+        { "$ref": "#/$defs/SseClosing" }
+      ]
     }
   }
 }
