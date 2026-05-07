@@ -52,3 +52,7 @@ jobs:
 
       - name: Run tests
         run: bun test
+
+      - name: Smoke-test examples
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run smoke:examples

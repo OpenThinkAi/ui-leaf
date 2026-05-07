@@ -157,8 +157,45 @@ for line in proc.stdout:
 proc.wait()
 ```
 
-A fuller Python example ships with v1.0.0 in `examples/python/`. The complete
-message schema is in [`packages/cli/schema/ipc.json`](./packages/cli/schema/ipc.json).
+The full worked example — including mutation handling and graceful shutdown — is
+in [`examples/python/counter.py`](./examples/python/counter.py). It uses only
+the standard library (`asyncio`, `json`, `signal`) and requires Python 3.9+.
+
+### Node (JS wrapper)
+
+```js
+import { mount } from "@openthink/ui-leaf";
+
+let count = 0;
+
+const view = await mount({
+  view: "counter",
+  viewsRoot: "/abs/path/to/views",
+  data: { initialCount: count },
+  mutations: {
+    increment: async ({ by = 1 } = {}) => {
+      count += by;
+      return { count };
+    },
+  },
+});
+
+console.log(`view ready at ${view.url}`);
+
+// Push updated data to connected browsers (fire-and-forget).
+await view.update({ data: { initialCount: count } });
+
+// Wait for the binary to close (browser tab closed or view.close() called).
+// `reason` is "caller" | "signal" | "error".
+const { reason } = await view.closed;
+```
+
+The full worked example — including `view.setView()` and `view.close()` — is
+in [`examples/node/counter.js`](./examples/node/counter.js). Run it with
+`bun run examples/node/counter.js` (after `bun install`).
+
+The complete message schema is in
+[`packages/cli/schema/ipc.json`](./packages/cli/schema/ipc.json).
 
 ### Protocol overview
 
@@ -387,8 +424,12 @@ The consumer CLI is responsible for (out of ui-leaf's scope):
   human-readable doc generated from this schema (`docs/ipc-protocol.md`) and a
   fuller architecture deep-dive (`docs/design.md`) ship as part of the v1.0.0
   release.
-- [examples/bash/counter.sh](./examples/bash/counter.sh) — runnable Bash example
-  with mutation round-trip. A Python `subprocess` example ships with v1.0.0.
+- [examples/bash/counter.sh](./examples/bash/counter.sh) — Bash example with
+  mutation round-trip (jq preferred; sed fallback for zero-dependency environments).
+- [examples/python/counter.py](./examples/python/counter.py) — Python asyncio
+  example using only the standard library.
+- [examples/node/counter.js](./examples/node/counter.js) — Node/JS example
+  using the `@openthink/ui-leaf` wrapper (`mount`, `update`, `setView`, `close`).
 
 ## License
 

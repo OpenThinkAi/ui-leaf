@@ -1,0 +1,9 @@
+{
+  "name": "@openthink/ui-leaf-node-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openthink/ui-leaf": "workspace:@openthink/ui-leaf-wrapper@*"
+  }
+}

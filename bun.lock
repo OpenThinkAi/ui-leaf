@@ -14,6 +14,13 @@
         "typescript": "^6.0.0",
       },
     },
+    "examples/node": {
+      "name": "@openthink/ui-leaf-node-example",
+      "version": "0.0.0",
+      "dependencies": {
+        "@openthink/ui-leaf": "workspace:@openthink/ui-leaf-wrapper@*",
+      },
+    },
     "packages/cli": {
       "name": "@openthink/ui-leaf-cli",
       "version": "0.5.0",
@@ -101,7 +108,11 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
+    "@openthink/ui-leaf": ["@openthink/ui-leaf-wrapper@workspace:packages/wrapper-js"],
+
     "@openthink/ui-leaf-cli": ["@openthink/ui-leaf-cli@workspace:packages/cli"],
+
+    "@openthink/ui-leaf-node-example": ["@openthink/ui-leaf-node-example@workspace:examples/node"],
 
     "@openthink/ui-leaf-wrapper": ["@openthink/ui-leaf-wrapper@workspace:packages/wrapper-js"],
 
