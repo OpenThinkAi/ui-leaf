@@ -114,8 +114,11 @@ jobs:
           node --input-type=module - "${{ matrix.binary }}" << 'DRIVER'
           import { spawn } from "node:child_process";
           import { createInterface } from "node:readline";
+          import { resolve } from "node:path";
 
-          const binary = process.argv[2];
+          // Resolve to an absolute path so spawn() finds the binary in cwd
+          // regardless of whether it's on PATH.
+          const binary = resolve(process.cwd(), process.argv[2]);
           const config = JSON.stringify({
             version: "1",
             type: "mount",
