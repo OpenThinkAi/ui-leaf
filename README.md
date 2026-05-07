@@ -2,191 +2,276 @@
 
 Customizable browser views, on demand, for any CLI.
 
+`ui-leaf` is a self-contained binary. Any program that can spawn a subprocess and
+read/write line-delimited JSON on stdio can drive a browser view — Bash scripts,
+Python CLIs, Rust tools, Node programs, AI agents. No Node.js, no Bun, no runtime
+required on the end user's machine. A thin JS wrapper for ergonomic Node use ships
+with v1.0.0.
+
+The view is your code — a `.tsx` file in your project's `views/` directory. That's
+the **bring-your-own-view** part.
+
+## Status
+
+`v1.0.0 — release in progress`. Binary architecture and stdio protocol are stable.
+JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). See
+[docs/design.md](./docs/design.md).
+
+## Install
+
+### Binary on `$PATH` (any language)
+
+```bash
+npm install -g @openthink/ui-leaf
+# or: bun add -g @openthink/ui-leaf  /  pnpm add -g @openthink/ui-leaf
+```
+
+Puts `ui-leaf` on your `$PATH`. Use for Bash, Python, Rust, Go, or any other
+language — there is no Node dependency at runtime.
+
+### Direct download (no Node required)
+
+Grab the right binary from
+[GitHub Releases](https://github.com/OpenThinkAi/ui-leaf/releases/latest):
+
+| Platform | Asset |
+|---|---|
+| macOS (Apple Silicon) | `ui-leaf-darwin-arm64` |
+| macOS (Intel) | `ui-leaf-darwin-x64` |
+| Linux x64 | `ui-leaf-linux-x64` |
+| Linux arm64 | `ui-leaf-linux-arm64` |
+| Windows x64 | `ui-leaf-windows-x64.exe` |
+
+Verify the SHA256 against `checksums.txt` from the same release, then make the
+binary executable:
+
+```bash
+# macOS Apple Silicon example:
+curl -L -o ui-leaf \
+  https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/ui-leaf-darwin-arm64
+grep ui-leaf-darwin-arm64 checksums.txt | sha256sum -c
+chmod +x ui-leaf && sudo mv ui-leaf /usr/local/bin/
+```
+
+### JS wrapper (`npm install @openthink/ui-leaf`, v1.0.0)
+
+With v1.0.0, `npm install @openthink/ui-leaf` will install the thin JS wrapper;
+`postinstall` downloads and verifies the right binary for your platform automatically.
+Full JS wrapper API documentation lands with the publish-target swap. See
+[docs/design.md §6](./docs/design.md) for the planned API surface.
+
 ```bash
 npm install @openthink/ui-leaf
-# or: bun add @openthink/ui-leaf / pnpm add @openthink/ui-leaf / yarn add @openthink/ui-leaf
+# or: bun add @openthink/ui-leaf  /  pnpm add @openthink/ui-leaf
 ```
 
-Type declarations (`dist/*.d.ts`) are emitted by TypeScript 6.x; consuming projects on TypeScript 5.x should generally work but are not exercised in CI.
+## Quickstart: non-JS callers
 
-## What it is
+The binary speaks line-delimited JSON on stdin/stdout. Line 1 of stdin is the
+config; subsequent lines are mutation responses and control messages. The binary
+emits events on stdout.
 
-`ui-leaf` lets any CLI mount a local browser view from a single function call. The CLI pipes structured data in; the view renders it; user-driven mutations (button clicks, edits, deletes) flow **back through the CLI** as plain function calls — never directly to whatever backing API the CLI uses.
+### Bash
 
-The view is your code, in your project's `views/` folder. Customize it, regenerate it with an LLM, fork the defaults — it's a regular `.tsx` file. That's the **bring-your-own-view** part.
-
-## Quickstart
-
-```ts
-// my-cli/src/commands/spend.ts
-import { mount } from "@openthink/ui-leaf";
-
-const view = await mount({
-  view: "spend",
-  data: { items: [/* ... */], totals: {/* ... */} },
-  mutations: {
-    recategorize: async (args: { id: string; category: string }) => {
-      await db.recategorize(args.id, args.category);
-      return { ok: true };
-    },
-  },
-});
-
-console.log(`view at ${view.url} — close the tab to exit`);
-await view.closed;
+```bash
+# Read-only view — no mutations:
+CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
+echo "$CONFIG" | ui-leaf mount
+# → {"version":"1","type":"ready","url":"http://127.0.0.1:54321","port":54321,"id":"..."}
+# (browser opens; user closes tab)
+# → {"version":"1","type":"disconnected"}
+# (mount stays alive; send {"version":"1","type":"close"} on stdin to terminate)
+# → {"version":"1","type":"closed","reason":"caller"}
 ```
 
-```tsx
-// my-cli/views/spend.tsx
-import type { ViewProps } from "@openthink/ui-leaf/view";
+The full worked example — including a mutation round-trip with a stateful counter — is
+in [`examples/bash/counter.sh`](./examples/bash/counter.sh).
 
-interface Spend {
-  items: { id: string; amount: number; category: string }[];
-  totals: { total: number };
+### Python
+
+```python
+import subprocess
+import json
+import sys
+
+config = {
+    "view": "spend",
+    "viewsRoot": "/abs/path/to/views",
+    "data": {"items": [], "totals": {}},
+    "mutations": ["recategorize"],
+    "port": 0,
 }
 
-export default function Spend({ data, mutate }: ViewProps<Spend>) {
-  return (
-    <main>
-      <h1>${data.totals.total}</h1>
-      <ul>
-        {data.items.map((item) => (
-          <li key={item.id}>
-            {item.amount} — {item.category}
-            <button
-              onClick={() => mutate("recategorize", { id: item.id, category: "food" })}
-            >
-              → food
-            </button>
-          </li>
-        ))}
-      </ul>
-    </main>
-  );
-}
+proc = subprocess.Popen(
+    ["ui-leaf", "mount"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True,
+)
+
+proc.stdin.write(json.dumps(config) + "\n")
+proc.stdin.flush()
+
+for line in proc.stdout:
+    event = json.loads(line)
+    if event["type"] == "ready":
+        print(f"view ready at {event['url']}", file=sys.stderr)
+    elif event["type"] == "mutate":
+        # run the mutation, write back the result
+        result = {"type": "result", "id": event["id"], "value": {"ok": True}}
+        proc.stdin.write(json.dumps(result) + "\n")
+        proc.stdin.flush()
+    elif event["type"] == "closed":
+        break
+
+proc.wait()
 ```
 
-Run `my-cli spend` (or whatever `--ui` flag your CLI uses) and a browser tab opens with the view rendering your data. Click a button, the CLI's `recategorize` handler runs, the result flows back to the view as a resolved promise.
+See [`examples/python/`](./examples/python/) for a fuller example, and
+[docs/ipc-protocol.md](./docs/ipc-protocol.md) for the complete message schema.
 
-## Why route mutations through the CLI?
+### Protocol overview
 
-Three reasons:
+**stdin messages (line-delimited JSON):**
 
-1. **The CLI already has the credentials.** Your view never sees auth tokens, never knows the API endpoint, never has to deal with refresh logic. The CLI handles all of that and exposes a constrained set of named operations.
-2. **The CLI can do work the view can't.** Read local files, shell out, check the user's git state, write to a SQLite file, anything Node can do.
-3. **The view is replaceable, the contract isn't.** Users can fork and rewrite the view freely; what they can't do is reach around the CLI to call your API directly.
+| Message | When |
+|---|---|
+| Line 1: config object | On spawn — declares view, data, mutations list, and options |
+| `{"version":"1","type":"result","id":N,"value":{}}` | Response to a `mutate` event |
+| `{"version":"1","type":"error","id":N,"message":"..."}` | Error response to a `mutate` event |
+| `{"version":"1","type":"update","data":{}}` | Push new data to the running view |
+| `{"version":"1","type":"view","source":"...tsx"}` | Hot-swap the view source |
+| `{"version":"1","type":"reopen"}` | Re-launch the browser tab after a disconnect |
+| `{"version":"1","type":"close"}` | Graceful shutdown |
 
-## How it works
+**stdout events (line-delimited JSON):**
 
-`mount()` compiles your view file once with `Bun.build`, injects data into `window.__UI_LEAF__`, starts a `Bun.serve` HTTP server, and opens the user's default browser. Mutations from the view POST back to a localhost endpoint with a per-launch random token; the runtime dispatches them to the handlers you registered.
+| Event | When |
+|---|---|
+| `{"version":"1","type":"ready","url":"...","port":N,"id":"..."}` | Server is up — emitted once |
+| `{"version":"1","type":"mutate","id":N,"name":"...","args":{}}` | View triggered a mutation — respond on stdin |
+| `{"version":"1","type":"disconnected"}` | Browser tab closed; mount stays alive |
+| `{"version":"1","type":"reconnected"}` | Browser tab re-opened |
+| `{"version":"1","type":"closed","reason":"caller\|signal\|natural"}` | Mount terminated — emitted once, last |
+| `{"version":"1","type":"error","phase":"build\|runtime","message":"..."}` | Build error (non-fatal) or runtime error (fatal) |
 
-**Heartbeat and lifecycle.** The browser tab sends periodic heartbeats while the page is open. When heartbeats stop (tab closed or navigated away), `mount()` emits a `disconnected` event but the server stays running — the port, token, and in-memory data are all preserved. When a tab reconnects (heartbeat resumes), a `reconnected` event fires. Any data updates or view swaps that arrive during the disconnected window take effect on the next load. The mount terminates only on an explicit caller close (`view.close()` or the inbound `{type:"close"}` message), a signal (SIGINT/SIGTERM), or an internal error — and `view.closed` resolves to the reason (`"caller"`, `"signal"`, or `"error"`).
+The binary exits 0 after `closed`, 1 on internal error.
 
-Multi-tab note: `disconnected` fires only when **all** open tabs go silent — the heartbeat is a single high-water mark across tabs, so closing one tab while another is open emits no event.
+### Tips for non-Node callers
 
-The transport is HTTP + JSON over loopback. The token is in `window.__UI_LEAF__.token`, served inline in the compiled HTML — so the token only protects against drive-by cross-origin requests in the user's browser, not against other processes on the same machine. Any local process that can reach `127.0.0.1:<port>` can fetch `GET /`, grep the token out, and call `/mutate` or `/api/data` with it; treat any local process you don't trust as having the same access as the view. View bundling resolves React from `ui-leaf`'s installed location, so your project doesn't need to install React.
+- **Pass `viewsRoot` as an absolute path.** No `cwd/views` default when invoked from
+  another process.
+- **Pass `port: 0`.** ui-leaf asks the OS for a free port and reports it in the `ready`
+  event. Lets you run concurrent views without port collisions.
+- **Kill the child on parent shutdown** — close stdin (triggers a `caller` close) or
+  send `SIGTERM`. Don't rely on heartbeat alone.
+- **Declare every mutation name** in `"mutations": []`. Undeclared names return 404.
+- **Tune `heartbeatTimeoutMs`** if the 5000 ms default doesn't fit. The mount does
+  not terminate on disconnect — only on `{type:"close"}`, stdin close, or a signal.
+  If you want fast shutdown on tab close, listen for `disconnected` and send
+  `{type:"close"}` on stdin.
+- **Handling concurrent mutations.** Each pending mutation has a unique `id`. Multiple
+  mutations can be in flight — match `result`/`error` responses to requests by `id`.
 
-The same trust boundary applies to the `data` you pass to `mount()`. The payload is JSON-inlined into `window.__UI_LEAF__.data` in the served HTML and held in memory for the mount lifetime — readable by the same set of same-UID local processes that can read the token. For PHI, PCI, financial records, or anything else where a same-UID local reader is in your threat model, use `dataLoader` instead — the loader's return value is served at a token-gated `/api/data` endpoint and never appears in the HTML. See "Data-at-rest" below for details.
+## Architecture: the broker principle
 
-## API surface
+`ui-leaf` enforces a hard separation between the view and the consumer's backend:
 
-```ts
-import { mount } from "@openthink/ui-leaf";
-import type { ViewProps, MutationHandler } from "@openthink/ui-leaf/view";
-
-await mount({
-  view,                                      // resolves <viewsRoot>/<view>.tsx
-  data,                                      // JSON-serializable, becomes data prop (convenience default)
-  dataLoader,                                // optional async fn; serves data via authenticated /api/data (no disk write)
-  mutations,                                 // Record<string, MutationHandler> (optional)
-  viewsRoot,                                 // optional, default: <cwd>/views
-  title,                                     // optional, default: "ui-leaf"
-  port,                                      // optional, default: 5810 (auto-bumps if busy; pass 0 for OS-assigned)
-  openBrowser,                               // optional, default: true
-  shell,                                     // optional, "tab" | "app", default: "tab"
-  csp,                                       // optional, default: "strict" (see Hardening)
-  silent,                                    // optional, default: false (see Programmatic use)
-  signal,                                    // optional AbortSignal
-  heartbeatTimeoutMs,                        // optional, default: 5000
-  startupGraceMs,                            // optional, default: 30000
-});
+```
+[CLI / caller]  ──────────── holds credentials, calls backend ──────────► [Backend]
+      │                                                                       ▲
+      │  spawns                                                               │
+      ▼                                                                       │ (never)
+[ui-leaf binary]  ◄── mutations ──  [Browser view]                           │
+      │                                    │                                  │
+      └── data updates ──────────────────► │     fetch("https://…") BLOCKED  ╳
+                                           └─────────────────────────────────╯
 ```
 
-(This is a summary — see the JSDoc on `MountOptions` for the full TypeScript shape and per-field rationale.)
+- The CLI holds the credentials. The view never sees auth tokens, never knows the
+  backend URL, never touches external state.
+- Mutations from the view are named operations declared by the caller. The binary
+  routes them to the caller process; the caller calls the backend; the result flows
+  back.
+- `csp: "strict"` (the default) makes this structural at the browser level:
+  `connect-src 'self'` and `form-action 'self'` are set as HTTP response headers.
+  The browser refuses any `fetch()` call to a non-loopback origin. The view cannot
+  reach an external API even if you (or an AI assistant) accidentally write a `fetch`
+  call in the view code.
 
-Returns `{ url, port, closed, close }`.
+**Live data updates.** Push new data to a running mount without a reload:
 
-## Hardening: locking the data/mutation contract with CSP
-
-By default, ui-leaf **browser-enforces the broker principle** via `csp: "strict"`. The view physically cannot reach external endpoints — `fetch()` to any non-loopback origin is blocked at the CSP layer, and HTML form submissions are locked to same-origin. All data flows through `data` and `mutations`.
-
-The default strict preset:
-
-- **`connect-src 'self'`** — the architectural lock. Views cannot fetch external APIs.
-- **`form-action 'self'`** — closes the form-submit exfiltration vector.
-- **`img-src 'self' https: data:`** — permits HTTPS images and data URIs.
-- **`font-src 'self' https: data:`** — permits CDN fonts.
-- **`style-src 'self' 'unsafe-inline'`** and **`script-src 'self' 'unsafe-inline'`** — required for React.
-
-Because the policy is sent as an HTTP response header, views cannot relax it at runtime. The only way to weaken the policy is to change the `mount()` call (i.e. fork the consumer CLI, not the view).
-
-If you have a legitimate need for cross-origin access (e.g. views that talk to a companion API), opt out:
-
-```ts
-mount({
-  view: "report",
-  data: { ... },
-  csp: "off",   // no CSP header; views can fetch arbitrary URLs
-});
+```json
+{"version":"1","type":"update","data":{"items":[...],"totals":{}}}
 ```
 
-For partial relaxation (e.g. allow Sentry telemetry but keep everything else locked), pass a raw CSP string:
+The binary forwards it to the browser via a server-sent event; the view re-renders
+with in-page state preserved.
 
-```ts
-csp: "default-src 'self'; connect-src 'self' https://sentry.io; form-action 'self'; img-src 'self' https:;"
+**CSP opt-out.** If the view legitimately needs external network access:
+
+```json
+{"view": "report", "viewsRoot": "...", "data": {}, "csp": "off"}
+```
+
+Or a targeted CSP string:
+
+```json
+{"csp": "default-src 'self'; connect-src 'self' https://sentry.io; form-action 'self';"}
 ```
 
 ### DNS-rebinding defence
 
-The dev server only accepts requests whose `Host` (and `Origin`, when sent) header points at a loopback name — `localhost`, `127.0.0.1`, or `[::1]`. Anything else gets a 403. This blocks DNS-rebinding attacks where a malicious page swings its A-record to `127.0.0.1` and tries to talk to your dev server with the per-launch auth token it can read out of `/index.html`.
+The server only accepts requests whose `Host` (and `Origin`, when present) header
+points at a loopback name — `localhost`, `127.0.0.1`, or `[::1]`. Anything else
+gets a 403. This blocks DNS-rebinding attacks where a malicious page swings its
+A-record to `127.0.0.1` and tries to reach ui-leaf's token endpoint.
 
-If you reach the dev server through a custom `/etc/hosts` alias (e.g. `my-app.local → 127.0.0.1`), pass it through `allowedHosts`:
+If you reach the server through a custom `/etc/hosts` alias, include it in
+`allowedHosts`:
 
-```ts
-mount({
-  view: "report",
-  data: { ... },
-  allowedHosts: ["my-app.local"],
-});
+```json
+{"allowedHosts": ["my-app.local"]}
 ```
 
-Be deliberate — every name you add becomes a viable rebinding target. Don't add public DNS names or LAN hostnames you don't fully control.
+Be deliberate — every name you add is a potential rebinding target. Don't add public
+DNS names or LAN hostnames you don't fully control.
 
-### Data-at-rest
+## Security model
 
-The `data` you pass to `mount()` is JSON-inlined into the compiled HTML that `GET /` serves, and held in memory for the mount lifetime. It is **not written to disk** — the compiled HTML exists only in process memory. A same-UID local process that can reach `127.0.0.1:<port>` can still recover the data by fetching `GET /` (no token required), so `data` is appropriate for routine payloads but not for PHI, PCI, or financial records where in-HTML exposure is in your threat model.
+### What ui-leaf defends
 
-For sensitive payloads use `dataLoader` instead of `data`:
+| Threat | Mechanism |
+|---|---|
+| Drive-by cross-origin requests from sites the user is browsing | DNS-rebind gate: `Host`/`Origin` header check |
+| Other local processes reading the auth token | Token delivered in URL fragment only — never in HTTP response body. Browser bootstrap clears it from the URL bar immediately. Subsequent requests carry it as `X-UI-Leaf-Token` header. |
+| View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer |
+| View invoking undeclared mutations | Only mutation names declared in the config are routed; others return 404 from `/mutate` |
 
-```ts
-mount({
-  view: "report",
-  dataLoader: async () => {
-    return await db.fetchSensitiveRecords(); // stays in memory; never appears in HTML
-  },
-});
-```
+### What's out of scope
 
-`dataLoader` invokes the function once at mount time, captures the result in-process, and serves it at a token-gated `GET /api/data` endpoint using the same per-launch token as `/mutate`. The view fetches `/api/data` on first render. The payload never appears in the HTML — it can only be read by a caller that already has the token. Note that a local process that can fetch `GET /` (no auth) can still read the token from `window.__UI_LEAF__.token` and then call `/api/data` — so `dataLoader` hardens against HTML-level exposure, not against a determined same-UID reader.
+- **Operator-as-attacker.** A process running as the same user can read ui-leaf's
+  memory or attach a debugger. Out of scope.
+- **OS URL handler compromise.** A malicious app registered as a browser URL handler
+  could intercept the launch URL and read the fragment token before ui-leaf's
+  bootstrap clears it. Out of scope.
+- **Browser extensions.** An extension with `<all_urls>` permission can read
+  `window.location.hash` before the bootstrap runs. Out of scope.
+- **SIGKILL data residency.** The tempdir survives SIGKILL until the next mount
+  start or OS rotation. Documented limitation.
+
+See [docs/design.md §10](./docs/design.md) for the full security model.
 
 ## Sharing views across users
 
-ui-leaf views run on `127.0.0.1`, so the URL in the address bar isn't shareable — a coworker can't paste `http://127.0.0.1:5810/...` into Slack and have it open on their machine. Browsers also can't be made to *display* a custom protocol like `mycli://...` for an HTTP-served page (browser security: any HTTP page could spoof itself otherwise).
-
-The pattern that works: **the consumer CLI generates a deep-link URL and passes it through `data`. The view renders a "copy share link" button that puts that deep-link URL on the clipboard.**
+ui-leaf views run on `127.0.0.1`, so the URL in the address bar isn't shareable —
+a coworker can't paste `http://127.0.0.1:5810/...` into Slack and have it open on
+their machine. The pattern that works: **the consumer CLI generates a deep-link URL
+and passes it through `data`. The view renders a "copy share link" button that puts
+the deep-link URL on the clipboard.**
 
 ```ts
-// in the consumer CLI:
+// in the consumer CLI (JS, via the wrapper):
 await mount({
   view: "spec",
   data: {
@@ -213,128 +298,34 @@ export default function Spec({ data }: ViewProps<{ spec: string; shareUrl: strin
 }
 ```
 
-Pair with `shell: "app"` (Chromium's chromeless window mode) to hide the localhost URL bar entirely on Chrome/Edge/Brave — the share button becomes the *only* way to copy a link from the view. (Safari and Firefox fall back to a regular tab.)
+User A clicks the button → `mycli://spec/abc123` is on their clipboard. User B
+clicks the link → their OS launches `mycli` → the consumer parses the URL, fetches
+the spec on User B's machine, and calls `mount(...)` again. Two independent ui-leaf
+invocations, same view, same data — no localhost URL ever leaves either machine.
 
-User A clicks the button → `mycli://spec/abc123` is on their clipboard. User B clicks the link → their browser hands off to the OS → OS launches `mycli` (because it's registered as the `mycli://` handler) → the consumer parses the URL, fetches the spec on their machine, calls `mount(...)` again on User B's side. Two independent ui-leaf invocations, same view, same data, no localhost URL ever leaves either machine.
+Pair with `"shell": "app"` in your config to hide the localhost URL bar (Chromium's
+chromeless window mode). Safari and Firefox fall back to a regular tab.
 
-What the consumer CLI is responsible for (out of ui-leaf's scope):
+The consumer CLI is responsible for (out of ui-leaf's scope):
 
-- **Registering the URL scheme with the OS** at install time. Per-OS:
-  - macOS: `.app` bundle with `CFBundleURLTypes` in `Info.plist`
-  - Windows: registry entries under `HKEY_CLASSES_ROOT\<scheme>`
+- **Registering the URL scheme with the OS** at install time:
+  - macOS: `CFBundleURLTypes` in `Info.plist`
+  - Windows: `HKEY_CLASSES_ROOT\<scheme>` registry entries
   - Linux: `.desktop` file with `MimeType=x-scheme-handler/<scheme>;`
-- **Parsing the URL on launch** — when the OS invokes `mycli mycli://spec/abc123`, parse it, look up `abc123`, build the data, call `mount`.
-- **Generating share URLs that are stable IDs**, not raw payloads — URLs land in browser history, screenshots, and copy-paste; treat them accordingly.
-- **Handling "not installed" UX** in the originating web app (if the link gets shared with someone who doesn't have `mycli`) — typical pattern is to set `window.location` to the deep-link URL, then after a short timeout fall back to "looks like you don't have mycli installed, here's how to get it."
+- **Parsing the URL on launch** — when the OS invokes `mycli mycli://spec/abc123`,
+  parse it, fetch the spec, build the data, call `mount`.
+- **Generating share URLs that are stable IDs**, not raw payloads.
+- **Handling "not installed" UX** for links shared with non-users.
 
-## Driving ui-leaf from a non-Node CLI (Rust / Go / Python / shell)
+## Further reading
 
-`ui-leaf mount` is a language-neutral binary. Any CLI that can spawn a subprocess and read/write JSON lines on stdio can drive ui-leaf with no Node code of its own — install ui-leaf via `npm i -g @openthink/ui-leaf` (or bundle it), and shell out to `ui-leaf mount`.
-
-### Protocol
-
-- **stdin (line-delimited JSON):**
-  - **Line 1** — config:
-    ```json
-    {"view":"spec","viewsRoot":"/abs/path","data":{},"mutations":["refresh","dismiss"],"port":0,"openBrowser":true,"heartbeatTimeoutMs":5000}
-    ```
-  - **Subsequent lines** — mutation responses (paired by `id`):
-    ```json
-    {"type":"result","id":1,"value":{"ok":true}}
-    {"type":"error","id":2,"message":"…"}
-    ```
-  - **Or live-update / control messages:**
-    ```json
-    {"version":"1","type":"update","data":{}}
-    {"version":"1","type":"view","source":"<tsx>"}
-    {"version":"1","type":"patch","data":{},"view":{"source":"<tsx>"}}
-    {"version":"1","type":"reopen"}
-    {"version":"1","type":"close"}
-    ```
-- **stdout (line-delimited JSON):**
-  - `{"type":"ready","url":"http://127.0.0.1:54321","port":54321}` — emitted once when the dev server is up
-  - `{"type":"mutate","id":1,"name":"refresh","args":{}}` — emitted when a view triggers a mutation; respond on stdin
-  - `{"type":"disconnected"}` — browser tab stopped heartbeating; mount stays alive
-  - `{"type":"reconnected"}` — browser reconnected after a disconnect
-  - `{"type":"closed","reason":"caller"}` — mount terminated; reason is `caller` | `signal` | `error`
-  - `{"type":"error","message":"…"}` — emitted on internal failure
-- **Lifecycle:** binary exits 0 on `closed`, 1 on internal error. The mount does **not** auto-terminate when the browser disconnects — only an explicit `{type:"close"}` message, stdin close, SIGINT/SIGTERM, or internal error terminates it. Closing stdin from the parent triggers a `caller` close.
-
-### Minimal Bash example (read-only view, no mutations)
-
-```bash
-CONFIG='{"view":"spec","viewsRoot":"/abs/path/to/views","data":{"markdown":"# hi"},"port":0}'
-echo "$CONFIG" | ui-leaf mount
-# → {"type":"ready","url":"http://127.0.0.1:54321","port":54321}
-# (browser opens; user closes tab → disconnected; mount stays running)
-# → {"type":"disconnected"}
-# (send {"type":"close"} on stdin to terminate)
-# → {"type":"closed","reason":"caller"}
-```
-
-### Worked example with mutations
-
-When the view calls `mutate("name", args)`, the binary emits a `mutate` event on stdout and waits for the parent to write back a `result` (or `error`) on stdin, paired by `id`. The runnable script in [`examples/bash/counter.sh`](./examples/bash/counter.sh) demonstrates the full cycle. Sketch:
-
-```
-Parent → child stdin:
-  {"view":"demo","viewsRoot":"/abs/path","data":{"initialCount":0},"mutations":["increment"]}
-
-Child → parent stdout:
-  {"type":"ready","url":"http://127.0.0.1:54321","port":54321}
-
-(user clicks "+1" in the view)
-
-Child → parent stdout:
-  {"type":"mutate","id":1,"name":"increment","args":{"by":1}}
-
-Parent → child stdin (after handling the mutation):
-  {"type":"result","id":1,"value":{"count":1}}
-
-(user closes tab → mount stays running)
-
-Child → parent stdout:
-  {"type":"disconnected"}
-
-(parent decides to shut down)
-
-Parent → child stdin:
-  {"type":"close"}
-
-Child → parent stdout:
-  {"type":"closed","reason":"caller"}
-```
-
-Each pending mutation has a unique `id`. Multiple mutations can be in flight concurrently — match `result`/`error` responses by id.
-
-### Tips for non-Node consumers
-
-- **Pass `viewsRoot` as an absolute path.** No `cwd/views` default games when invoked from another process.
-- **Pass `port: 0`.** ui-leaf asks the OS for a free port and reports it back in the `ready` event. Lets you run concurrent views without collision.
-- **Tune `heartbeatTimeoutMs`** if the 5000ms default doesn't fit your loop: lower it (e.g. 1000) for sub-second `disconnected` detection, raise it for sessions where the page may legitimately pause (devtools paused on a breakpoint, machine sleep, long background-tab throttling). Note that heartbeat timeout no longer terminates the mount — the mount only terminates on an explicit `{type:"close"}` message, stdin close, or signal. If you want fast shutdown on tab close, listen for `disconnected` and send `{type:"close"}` on stdin.
-- **Kill the child on parent shutdown** rather than relying on heartbeat — `kill <pid>` from the parent, or close stdin (which triggers a `caller` close).
-- **Declare every mutation name** the view will call in the `mutations: []` array. The binary only routes mutations whose names appear in the list; calls to undeclared names get a 404 from `/mutate` with the standard "no mutation handler registered for X" error, and the view's `mutate()` promise rejects.
-
-### Driving from Node via `mount()` directly
-
-If your consumer is itself Node (or you want a thin in-process integration), use the SDK directly. Pass `silent: true` to redirect stdout to stderr for the lifetime of the server, keeping stdout clean for your own protocol (capture `process.stdout.write` *before* calling `mount()` if you need to write to real stdout from the same process):
-
-```ts
-const realStdoutWrite = process.stdout.write.bind(process.stdout);
-const view = await mount({
-  view: "spec",
-  viewsRoot: "/abs/path/to/views",
-  data: { /* ... */ },
-  openBrowser: false,
-  silent: true,
-  port: 0,
-});
-realStdoutWrite(JSON.stringify({ type: "ready", url: view.url, port: view.port }) + "\n");
-```
-
-## Status
-
-`0.2.x` — pre-1.0, expect churn. The Node SDK and the `ui-leaf mount` binary are settling but not frozen.
+- [docs/design.md](./docs/design.md) — architecture deep-dive: repo layout, build
+  pipeline, versioning policy, security model
+- [docs/ipc-protocol.md](./docs/ipc-protocol.md) — full IPC message schema
+  (generated from `packages/cli/schema/ipc.json`)
+- [examples/bash/counter.sh](./examples/bash/counter.sh) — runnable Bash example
+  with mutation round-trip
+- [examples/python/](./examples/python/) — Python `subprocess` example
 
 ## License
 
