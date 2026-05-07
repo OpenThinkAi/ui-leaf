@@ -26,19 +26,27 @@ full design doc (`docs/design.md`) ships alongside the binary release.
 
 ## Install
 
-### Binary on `$PATH` (any language)
+### Binary on `$PATH` (v1.0.0, any language)
+
+> Available with the v1.0.0 release. Today's `@openthink/ui-leaf@0.8.x` is the
+> Node SDK — see the v0.8.x callout above.
 
 ```bash
 npm install -g @openthink/ui-leaf
 # or: bun add -g @openthink/ui-leaf  /  pnpm add -g @openthink/ui-leaf
 ```
 
-Puts `ui-leaf` on your `$PATH`. Use for Bash, Python, Rust, Go, or any other
-language — there is no Node dependency at runtime.
+With v1.0.0, the global install puts the `ui-leaf` binary on your `$PATH`. Use
+for Bash, Python, Rust, Go, or any other language — the binary itself has no
+Node dependency at runtime (the install path goes through npm's postinstall).
 
-### Direct download (no Node required)
+### Direct download (v1.0.0, no Node required)
 
-Grab the right binary from
+> Available with the v1.0.0 release. The asset names below are the v1.0.0
+> release artifacts; today's `releases/latest` is v0.8.x and ships the SDK
+> tarball, not these binaries.
+
+Once v1.0.0 ships, grab the right binary from
 [GitHub Releases](https://github.com/OpenThinkAi/ui-leaf/releases/latest):
 
 | Platform | Asset |
@@ -59,16 +67,19 @@ curl -L -o ui-leaf \
   https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/ui-leaf-darwin-arm64
 curl -L -o checksums.txt \
   https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/checksums.txt
-grep ui-leaf-darwin-arm64 checksums.txt | shasum -a 256 -c
-chmod +x ui-leaf && sudo mv ui-leaf /usr/local/bin/
+grep ui-leaf-darwin-arm64 checksums.txt | shasum -a 256 -c -  \
+  && chmod +x ui-leaf  \
+  && sudo mv ui-leaf /usr/local/bin/
+# (chain with && so a checksum failure aborts the install)
 ```
 
 ### JS wrapper (`npm install @openthink/ui-leaf`, v1.0.0)
 
 With v1.0.0, `npm install @openthink/ui-leaf` will install the thin JS wrapper;
-`postinstall` downloads and verifies the right binary for your platform automatically.
-Full JS wrapper API documentation lands with the publish-target swap. See
-the `docs/design.md §6` section (ships with v1.0.0) for the planned API surface.
+`postinstall` downloads and verifies the right binary for your platform
+automatically (SHA256 against the release's `checksums.txt`). Full JS wrapper
+API documentation lands with the publish-target swap as part of the v1.0.0
+release.
 
 ```bash
 npm install @openthink/ui-leaf
@@ -138,10 +149,27 @@ for line in proc.stdout:
 proc.wait()
 ```
 
-See `examples/python/` (coming with v1.0.0) for a fuller example, and
-`docs/ipc-protocol.md` (coming with v1.0.0) for the complete message schema.
+A fuller Python example ships with v1.0.0 in `examples/python/`. The complete
+message schema is in [`packages/cli/schema/ipc.json`](./packages/cli/schema/ipc.json).
 
 ### Protocol overview
+
+**Versioning.** Every IPC message carries `"version":"1"` as the first field;
+the binary rejects messages without it. This is a v1.0.0 wire-format requirement
+and is **not backward-compatible** with the unversioned shape pre-1.0.0 callers
+may have used. The schema is published as JSON Schema (see `packages/cli/schema/ipc.json`).
+
+**Auth.** The per-launch random token is delivered to the browser via the
+launch URL fragment (`#token=<hex>`) — never inlined into the served HTML. The
+browser bootstrap reads it from `window.location.hash`, immediately clears the
+fragment via `history.replaceState`, and sends it as an `X-UI-Leaf-Token`
+header on subsequent `/mutate`, `/api/data`, and `/events` requests. A local
+process that fetches `GET /` cannot recover the token from the response body.
+
+**Default port.** When `port` is omitted from the config, the OS assigns a free
+port (equivalent to passing `port: 0`); the bound port is reported in the
+`ready` event. Pass an explicit number if you need a fixed port (e.g. for an
+OS-registered URL handler).
 
 **stdin messages (line-delimited JSON):**
 
@@ -256,13 +284,16 @@ DNS names or LAN hostnames you don't fully control.
 
 ## Security model
 
-### What ui-leaf defends
+The mechanisms below describe **v1.0.0 behavior**. The v0.8.x SDK has a
+narrower posture — its README documents what's enforced in that release.
+
+### What ui-leaf defends (v1.0.0)
 
 | Threat | Mechanism |
 |---|---|
 | Drive-by cross-origin requests from sites the user is browsing | DNS-rebind gate: `Host`/`Origin` header check |
-| Other local processes reading the auth token | Token delivered in URL fragment only — never in HTTP response body. Browser bootstrap clears it from the URL bar immediately. Subsequent requests carry it as `X-UI-Leaf-Token` header. |
-| View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer |
+| Other local processes reading the auth token | Token delivered in URL fragment only — never in HTTP response body. Browser bootstrap clears it from the URL bar immediately. Subsequent requests carry it as `X-UI-Leaf-Token` header (covers `fetch`, `XHR`, WebSocket — `connect-src` in CSP terms — and form submissions via `form-action`). |
+| View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer. **Turning CSP off** (`csp: "off"`) re-opens the broker bypass: views can call any backend they want, defeating the broker principle. Use only when external network access is genuinely intended. |
 | View invoking undeclared mutations | Only mutation names declared in the config are routed; others return 404 from `/mutate` |
 
 ### What's out of scope
@@ -277,7 +308,7 @@ DNS names or LAN hostnames you don't fully control.
 - **SIGKILL data residency.** The tempdir survives SIGKILL until the next mount
   start or OS rotation. Documented limitation.
 
-See `docs/design.md §10` _(coming with v1.0.0)_ for the full security model.
+The full security model ships as part of the v1.0.0 design doc release.
 
 ## Sharing views across users
 
@@ -287,8 +318,9 @@ their machine. The pattern that works: **the consumer CLI generates a deep-link 
 and passes it through `data`. The view renders a "copy share link" button that puts
 the deep-link URL on the clipboard.**
 
+In JS via the v1.0.0 wrapper (full API docs ship with v1.0.0 final):
+
 ```ts
-// in the consumer CLI (JS, via the wrapper):
 await mount({
   view: "spec",
   data: {
@@ -298,6 +330,9 @@ await mount({
   mutations: { /* … */ },
 });
 ```
+
+From any other language, the equivalent is the stdin config: pass `shareUrl`
+inside `data`, the view reads it the same way.
 
 ```tsx
 // in the consumer's views/spec.tsx:
@@ -336,13 +371,13 @@ The consumer CLI is responsible for (out of ui-leaf's scope):
 
 ## Further reading
 
-- `docs/design.md` _(coming with v1.0.0)_ — architecture deep-dive: repo layout,
-  build pipeline, versioning policy, security model
-- `docs/ipc-protocol.md` _(coming with v1.0.0)_ — full IPC message schema
-  (generated from `packages/cli/schema/ipc.json`)
+- [`packages/cli/schema/ipc.json`](./packages/cli/schema/ipc.json) — the IPC
+  schema (JSON Schema 2020-12). Source of truth for the wire protocol. A
+  human-readable doc generated from this schema (`docs/ipc-protocol.md`) and a
+  fuller architecture deep-dive (`docs/design.md`) ship as part of the v1.0.0
+  release.
 - [examples/bash/counter.sh](./examples/bash/counter.sh) — runnable Bash example
-  with mutation round-trip
-- `examples/python/` _(coming with v1.0.0)_ — Python `subprocess` example
+  with mutation round-trip. A Python `subprocess` example ships with v1.0.0.
 
 ## License
 
