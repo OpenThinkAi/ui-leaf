@@ -24,9 +24,12 @@ function hostTarget(): string {
 }
 
 const binSuffix = process.platform === "win32" ? ".exe" : "";
+// build-binaries.ts writes to <repo-root>/dist/, not packages/wrapper-js/dist/.
 const binaryPath = path.resolve(
   import.meta.dir,
-  "..",
+  "..",  // packages/wrapper-js
+  "..",  // packages
+  "..",  // <repo-root>
   "dist",
   `ui-leaf-${hostTarget()}${binSuffix}`,
 );
