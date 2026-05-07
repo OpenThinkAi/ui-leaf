@@ -258,6 +258,8 @@ async function runMount(): Promise<void> {
             phase: "build",
             message: errors.map((e: { message: string }) => e.message).join("; "),
           });
+        } else {
+          emit({ type: "view-swapped" });
         }
       })();
       return;
@@ -272,6 +274,8 @@ async function runMount(): Promise<void> {
             phase: "build",
             message: errors.map((e: { message: string }) => e.message).join("; "),
           });
+        } else {
+          emit({ type: "view-swapped" });
         }
       })();
       return;

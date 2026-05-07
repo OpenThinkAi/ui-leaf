@@ -51,13 +51,19 @@ export type OutboundError = {
   message: string;
 };
 
+export type OutboundViewSwapped = {
+  version: ProtocolVersion;
+  type: "view-swapped";
+};
+
 export type OutboundMessage =
   | OutboundReady
   | OutboundMutate
   | OutboundDisconnected
   | OutboundReconnected
   | OutboundClosed
-  | OutboundError;
+  | OutboundError
+  | OutboundViewSwapped;
 
 // ---------------------------------------------------------------------------
 // Inbound: messages the binary reads on stdin.

@@ -29,11 +29,11 @@ interface Target {
 
 // Exported for unit tests so they can verify mappings without calling process.exit.
 export const PLATFORM_MAP: Readonly<Record<string, Target>> = {
-  "darwin-arm64": { artifact: "ui-leaf-darwin-arm64", binary: "ui-leaf" },
-  "darwin-x64": { artifact: "ui-leaf-darwin-x64", binary: "ui-leaf" },
-  "linux-x64": { artifact: "ui-leaf-linux-x64", binary: "ui-leaf" },
-  "linux-arm64": { artifact: "ui-leaf-linux-arm64", binary: "ui-leaf" },
-  "win32-x64": { artifact: "ui-leaf-windows-x64.exe", binary: "ui-leaf.exe" },
+  "darwin-arm64": { artifact: "ui-leaf-darwin-arm64", binary: "ui-leaf-bin" },
+  "darwin-x64": { artifact: "ui-leaf-darwin-x64", binary: "ui-leaf-bin" },
+  "linux-x64": { artifact: "ui-leaf-linux-x64", binary: "ui-leaf-bin" },
+  "linux-arm64": { artifact: "ui-leaf-linux-arm64", binary: "ui-leaf-bin" },
+  "win32-x64": { artifact: "ui-leaf-windows-x64.exe", binary: "ui-leaf-bin.exe" },
 };
 
 function detectTarget(): Target {
@@ -221,23 +221,6 @@ export function parseChecksums(text: string, artifact: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Windows JS launcher — written to bin/ui-leaf when installing on win32.
-// npm's bin shim will invoke this file; it spawns the sibling .exe.
-// ---------------------------------------------------------------------------
-const WIN_LAUNCHER = `#!/usr/bin/env node
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const child = spawn(
-  path.join(__dirname, 'ui-leaf.exe'),
-  process.argv.slice(2),
-  { stdio: 'inherit' }
-);
-child.on('exit', (code) => process.exit(code ?? 1));
-`;
-
-// ---------------------------------------------------------------------------
 // UI_LEAF_BINARY_PATH — install from local path, skip download.
 // On POSIX this creates a symlink; if the source is moved/deleted the link
 // silently breaks. Use an absolute path to avoid CWD-relative surprises.
@@ -266,7 +249,6 @@ async function installFromEnvPath(
 async function main(): Promise<void> {
   const target = detectTarget();
   const version = readVersion();
-  const isWindows = process.platform === "win32";
 
   await fsp.mkdir(BIN_DIR, { recursive: true });
 
@@ -347,15 +329,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 4. Atomic rename into place, then chmod / write Windows launcher.
+  // 4. Atomic rename into place, then set executable bit (no-op on Windows).
   await fsp.rename(tmpBinary, binaryDest);
-
-  if (isWindows) {
-    // Replace the stub at bin/ui-leaf with a Node launcher for the .exe.
-    await fsp.writeFile(path.join(BIN_DIR, "ui-leaf"), WIN_LAUNCHER, "utf8");
-  } else {
-    await fsp.chmod(binaryDest, 0o755);
-  }
+  await fsp.chmod(binaryDest, 0o755);
 
   await writeSentinel(version, target.artifact);
   console.log(`ui-leaf: installed ${target.artifact} v${version}`);

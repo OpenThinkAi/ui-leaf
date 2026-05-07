@@ -348,6 +348,20 @@
       },
       "additionalProperties": false
     },
+    "OutboundViewSwapped": {
+      "description": "Emitted by the binary after a successful view swap (triggered by InboundView or InboundPatch). The caller uses this to resolve a pending setView() or patch() call.",
+      "type": "object",
+      "required": ["version", "type"],
+      "properties": {
+        "version": { "$ref": "#/$defs/Version1" },
+        "type": {
+          "type": "string",
+          "const": "view-swapped",
+          "description": "Discriminant: view swap completed."
+        }
+      },
+      "additionalProperties": false
+    },
     "OutboundMessage": {
       "description": "Any valid outbound message (stdout lines emitted by the binary).",
       "oneOf": [
@@ -356,7 +370,8 @@
         { "$ref": "#/$defs/OutboundDisconnected" },
         { "$ref": "#/$defs/OutboundReconnected" },
         { "$ref": "#/$defs/OutboundClosed" },
-        { "$ref": "#/$defs/OutboundError" }
+        { "$ref": "#/$defs/OutboundError" },
+        { "$ref": "#/$defs/OutboundViewSwapped" }
       ]
     }
   }

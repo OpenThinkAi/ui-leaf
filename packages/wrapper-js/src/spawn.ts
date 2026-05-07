@@ -32,13 +32,14 @@ import {
 const KILL_GRACE_MS = 5_000;
 
 /**
- * Resolve the bundled binary path. tsup outputs `dist/spawn.js`; the binary
- * lives at `bin/ui-leaf` (or `bin/ui-leaf.exe` on Windows) one level up. The
- * stub at bin/ui-leaf is replaced by postinstall with the real native binary.
+ * Resolve the bundled binary path. tsup outputs `dist/spawn.js`; the native
+ * binary lives at `bin/ui-leaf-bin` (or `bin/ui-leaf-bin.exe` on Windows)
+ * one level up. postinstall downloads and writes that file; `bin/ui-leaf` is
+ * the permanent CJS shim for CLI use and is never overwritten.
  */
 function defaultBinaryPath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const filename = process.platform === "win32" ? "ui-leaf.exe" : "ui-leaf";
+  const filename = process.platform === "win32" ? "ui-leaf-bin.exe" : "ui-leaf-bin";
   return path.resolve(here, "..", "bin", filename);
 }
 
