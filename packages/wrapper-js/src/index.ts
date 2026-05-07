@@ -36,7 +36,8 @@ export type MountOptions = {
   signal?: AbortSignal;
   /** Suppress binary stderr forwarding to the parent process. */
   silent?: boolean;
-  /** Override the resolved binary path (used by tests for mock binary injection). */
+  /** Override the postinstall-resolved binary path. Valid as a power-user escape
+   *  hatch (e.g. a local build); the mock binary used by tests is injected here. */
   binaryPath?: string;
 };
 
@@ -62,14 +63,15 @@ export interface View {
   setView(source: string): Promise<void>;
 
   /**
-   * Atomic data + view swap. Translates to the narrowest wire message:
-   *   both fields  → patch   (awaits view-swapped / build error)
-   *   view only    → view    (awaits view-swapped / build error)
-   *   data only    → update  (fire-and-forget)
-   *   neither      → no-op   (resolves immediately)
+   * Atomic data + view swap. `source` is raw TSX (same as setView's arg, not
+   * the `view` name from MountOptions). Translates to the narrowest wire message:
+   *   both fields   → patch   (awaits view-swapped / build error)
+   *   source only   → view    (awaits view-swapped / build error)
+   *   data only     → update  (fire-and-forget)
+   *   neither       → no-op   (resolves immediately)
    * (AC #4)
    */
-  patch(opts: { data?: unknown; view?: string }): Promise<void>;
+  patch(opts: { data?: unknown; source?: string }): Promise<void>;
 
   /** Re-invoke open(url) to launch a fresh browser tab (AC #4). */
   reopen(): void;
@@ -117,8 +119,11 @@ export async function mount(options: MountOptions): Promise<View> {
 
   // Dispatch inbound mutate events into the mutations map.
   handle.onMutate(async (_id, name, args) => {
-    const handler = mutationMap[name];
-    if (!handler) throw new Error(`no mutation handler for "${name}"`);
+    const handler = Object.hasOwn(mutationMap, name) ? mutationMap[name] : undefined;
+    if (!handler)
+      throw new Error(
+        `ui-leaf: no mutation handler registered for "${name}". Add it to the mutations map passed to mount().`,
+      );
     return handler(args);
   });
 
@@ -283,26 +288,26 @@ export async function mount(options: MountOptions): Promise<View> {
       });
     },
 
-    patch(opts: { data?: unknown; view?: string }): Promise<void> {
+    patch(opts: { data?: unknown; source?: string }): Promise<void> {
       const hasData = opts.data !== undefined;
-      const hasView = opts.view !== undefined;
+      const hasSource = opts.source !== undefined;
 
-      if (hasData && hasView) {
+      if (hasData && hasSource) {
         return enqueueViewOp(() => {
           handle.send({
             version: PROTOCOL_VERSION,
             type: "patch",
             data: opts.data,
-            view: { source: opts.view as string },
+            view: { source: opts.source as string },
           });
         });
       }
-      if (hasView) {
+      if (hasSource) {
         return enqueueViewOp(() => {
           handle.send({
             version: PROTOCOL_VERSION,
             type: "view",
-            source: opts.view as string,
+            source: opts.source as string,
           });
         });
       }

@@ -223,7 +223,7 @@ describe("patch()", () => {
       { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
       { kind: "exit", code: 0 },
     ]);
-    await view.patch({ data: { x: 1 }, view: "<div/>" });
+    await view.patch({ data: { x: 1 }, source: "<div/>" });
     await view.close();
   });
 
@@ -239,7 +239,7 @@ describe("patch()", () => {
     await view.close();
   });
 
-  test("patch({ view }) sends view and awaits view-swapped", async () => {
+  test("patch({ source }) sends view and awaits view-swapped", async () => {
     const view = await mountMock([
       { kind: "emit", msg: { version: "1", type: "ready", url: "u", port: 1 } },
       { kind: "wait-for", type: "view", timeoutMs: 5000 },
@@ -248,7 +248,7 @@ describe("patch()", () => {
       { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
       { kind: "exit", code: 0 },
     ]);
-    await view.patch({ view: "<div>view only</div>" });
+    await view.patch({ source: "<div>view only</div>" });
     await view.close();
   });
 
