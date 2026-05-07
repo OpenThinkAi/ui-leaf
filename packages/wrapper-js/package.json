@@ -1,8 +1,29 @@
 {
-  "name": "@openthink/ui-leaf-wrapper",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@openthink/ui-leaf",
+  "version": "1.0.0-rc.1",
+  "description": "Customizable browser views, on demand, for any CLI.",
+  "license": "MIT",
+  "author": "Matt Pardini",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenThinkAi/ui-leaf.git",
+    "directory": "packages/wrapper-js"
+  },
+  "homepage": "https://github.com/OpenThinkAi/ui-leaf",
+  "bugs": "https://github.com/OpenThinkAi/ui-leaf/issues",
+  "keywords": [
+    "cli",
+    "ui",
+    "browser",
+    "byov",
+    "local-first",
+    "views",
+    "dashboard"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -37,8 +37,8 @@
       },
     },
     "packages/wrapper-js": {
-      "name": "@openthink/ui-leaf-wrapper",
-      "version": "0.0.0",
+      "name": "@openthink/ui-leaf",
+      "version": "1.0.0-rc.1",
       "bin": {
         "ui-leaf": "./bin/ui-leaf",
       },
@@ -108,13 +108,11 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@openthink/ui-leaf": ["@openthink/ui-leaf-wrapper@workspace:packages/wrapper-js"],
+    "@openthink/ui-leaf": ["@openthink/ui-leaf@workspace:packages/wrapper-js"],
 
     "@openthink/ui-leaf-cli": ["@openthink/ui-leaf-cli@workspace:packages/cli"],
 
     "@openthink/ui-leaf-node-example": ["@openthink/ui-leaf-node-example@workspace:examples/node"],
-
-    "@openthink/ui-leaf-wrapper": ["@openthink/ui-leaf-wrapper@workspace:packages/wrapper-js"],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.60.2", "", { "os": "android", "cpu": "arm" }, "sha512-dnlp69efPPg6Uaw2dVqzWRfAWRnYVb1XJ8CyyhIbZeaq4CA5/mLeZ1IEt9QqQxmbdvagjLIm2ZL8BxXv5lH4Yw=="],
 

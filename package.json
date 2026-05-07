@@ -1,61 +1,18 @@
 {
-  "name": "@openthink/ui-leaf",
-  "version": "0.8.0",
-  "description": "Customizable browser views, on demand, for any CLI.",
-  "license": "MIT",
-  "author": "Matt Pardini",
+  "name": "@openthink/ui-leaf-root",
+  "private": true,
   "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/OpenThinkAi/ui-leaf.git"
-  },
-  "homepage": "https://github.com/OpenThinkAi/ui-leaf",
-  "bugs": "https://github.com/OpenThinkAi/ui-leaf/issues",
-  "keywords": [
-    "cli",
-    "ui",
-    "browser",
-    "byov",
-    "local-first",
-    "views",
-    "dashboard"
-  ],
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "exports": {
-    ".": {
-      "types": "./packages/cli/dist/index.d.ts",
-      "import": "./packages/cli/dist/index.js"
-    },
-    "./view": {
-      "types": "./packages/cli/dist/view.d.ts",
-      "import": "./packages/cli/dist/view.js"
-    }
-  },
-  "main": "./packages/cli/dist/index.js",
-  "types": "./packages/cli/dist/index.d.ts",
-  "bin": {
-    "ui-leaf": "./packages/cli/dist/cli.js"
-  },
-  "files": [
-    "packages/cli/dist",
-    "packages/cli/package.json",
-    "README.md",
-    "LICENSE"
-  ],
   "workspaces": ["packages/*", "examples/node"],
   "scripts": {
     "build": "bun run --filter '@openthink/ui-leaf-cli' build",
     "build:binaries": "bun run scripts/build-binaries.ts",
-    "build:wrapper": "bun run --filter '@openthink/ui-leaf-wrapper' build",
+    "build:wrapper": "bun run --filter '@openthink/ui-leaf' build",
     "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
     "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
     "smoke:examples": "bun run scripts/smoke-examples.ts",
     "generate:protocol-doc": "bun run scripts/generate-protocol-doc.ts",
-    "check:protocol-doc": "bun run scripts/generate-protocol-doc.ts check",
-    "prepublishOnly": "bun run build"
+    "check:protocol-doc": "bun run scripts/generate-protocol-doc.ts check"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openthink/ui-leaf": "workspace:@openthink/ui-leaf-wrapper@*"
+    "@openthink/ui-leaf": "workspace:*"
   }
 }
