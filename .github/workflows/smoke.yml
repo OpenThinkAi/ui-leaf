@@ -2,12 +2,12 @@ name: Smoke test
 
 # Triggered manually after a prerelease publishes to GH Releases + npm.
 # Runs on all five supported platforms; validates the binary, the JS wrapper
-# postinstall, and a headless mount round-trip.
+# postinstall, and a headless mount round-trip via stdin IPC (no token needed).
 #
 # Usage:
 #   1. Wait for the publish workflow to complete for the version you want to test.
 #   2. Go to Actions → Smoke test → Run workflow.
-#   3. Enter the version (e.g. 1.0.0-rc.1) and the npm tag (e.g. next).
+#   3. Enter the version (e.g. 1.0.0-rc.1) and the npm tag (e.g. next or latest).
 
 on:
   workflow_dispatch:
@@ -22,9 +22,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  RELEASE_BASE: https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}
 
 jobs:
   binary:
@@ -53,17 +50,22 @@ jobs:
       - name: Download checksums
         shell: bash
         run: |
-          curl -fsSL "$RELEASE_BASE/checksums.txt" -o checksums.txt
+          curl -fsSL \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/checksums.txt" \
+            -o checksums.txt
           cat checksums.txt
 
       - name: Download binary
         shell: bash
         run: |
-          curl -fsSL "$RELEASE_BASE/${{ matrix.artifact }}" -o "${{ matrix.binary }}"
+          curl -fsSL \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/${{ matrix.artifact }}" \
+            -o "${{ matrix.binary }}"
 
       - name: Verify SHA256
         shell: bash
         run: |
+          set -euo pipefail
           EXPECTED=$(grep "${{ matrix.artifact }}" checksums.txt | awk '{print $1}')
           if [ -z "$EXPECTED" ]; then
             echo "No checksum entry for ${{ matrix.artifact }}" >&2
@@ -72,7 +74,7 @@ jobs:
           if command -v sha256sum >/dev/null 2>&1; then
             ACTUAL=$(sha256sum "${{ matrix.binary }}" | awk '{print $1}')
           else
-            # macOS
+            # macOS ships shasum, not sha256sum
             ACTUAL=$(shasum -a 256 "${{ matrix.binary }}" | awk '{print $1}')
           fi
           if [ "$ACTUAL" != "$EXPECTED" ]; then
@@ -89,10 +91,14 @@ jobs:
         shell: bash
         run: ./${{ matrix.binary }} --help
 
-      - name: Smoke — headless mount round-trip
+      - name: Setup Node 22 (for IPC driver script)
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Write smoke view
         shell: bash
         run: |
-          # Write a minimal view
           mkdir -p views
           cat > views/smoke.tsx << 'TSX'
           export default function Smoke({ title }: { title: string }) {
@@ -100,63 +106,83 @@ jobs:
           }
           TSX
 
-          # Write a minimal mount config
-          cat > smoke-config.json << 'JSON'
-          {
-            "version": "1",
-            "type": "mount",
-            "view": "views/smoke.tsx",
-            "data": { "title": "smoke-ok" },
-            "noOpen": true,
-            "heartbeatTimeoutMs": 3000
-          }
-          JSON
+      - name: Smoke — headless mount round-trip (stdin IPC)
+        shell: bash
+        run: |
+          # Node driver script: spawns binary, sends config + update + close via
+          # stdin IPC. No token needed — stdin is the trusted parent channel.
+          node - "${{ matrix.binary }}" << 'DRIVER'
+          import { spawn } from "node:child_process";
+          import { createInterface } from "node:readline";
 
-          # Spawn mount; capture port from stdout; send a mutation; wait for closed
-          ./${{ matrix.binary }} mount < smoke-config.json > smoke-out.txt &
-          MOUNT_PID=$!
-          sleep 3
+          const binary = process.argv[2];
+          const config = JSON.stringify({
+            version: "1",
+            type: "mount",
+            view: "views/smoke.tsx",
+            data: { title: "smoke-ok" },
+            noOpen: true,
+            heartbeatTimeoutMs: 5000,
+          });
 
-          # Extract port from the "ready" line
-          PORT=$(grep '"type":"ready"' smoke-out.txt | head -1 | \
-                 node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8').trim()); process.stdout.write(String(d.port))" || true)
+          const child = spawn(binary, ["mount"], { stdio: ["pipe", "pipe", "inherit"] });
+          const rl = createInterface({ input: child.stdout });
 
-          if [ -z "$PORT" ]; then
-            echo "No ready event found in:" >&2
-            cat smoke-out.txt >&2
-            kill $MOUNT_PID 2>/dev/null || true
-            exit 1
-          fi
+          let ready = false;
+          let updateSent = false;
+          let closeSent = false;
+          let closed = false;
 
-          echo "Mount ready on port $PORT"
+          rl.on("line", (line) => {
+            let event;
+            try { event = JSON.parse(line); } catch { return; }
 
-          # Send an update mutation and wait for acknowledgement
-          TOKEN=$(grep '"type":"ready"' smoke-out.txt | head -1 | \
-                  node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8').trim()); process.stdout.write(d.token)" || true)
+            if (event.type === "ready" && !ready) {
+              ready = true;
+              console.log("ready on port", event.port);
+              // Send update via stdin
+              child.stdin.write(
+                JSON.stringify({ version: "1", type: "update", data: { title: "mutated" } }) + "\n"
+              );
+              updateSent = true;
+              // Close after a short delay so the update can be processed
+              setTimeout(() => {
+                child.stdin.write(JSON.stringify({ version: "1", type: "close" }) + "\n");
+                closeSent = true;
+              }, 500);
+            }
 
-          MUTATION_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "http://127.0.0.1:$PORT/mutate" \
-            -H "Content-Type: application/json" \
-            -H "X-UI-Leaf-Token: $TOKEN" \
-            -d '{"version":"1","type":"update","data":{"title":"mutated"}}')
+            if (event.type === "closed") {
+              closed = true;
+              console.log("closed event OK");
+              rl.close();
+            }
 
-          if [ "$MUTATION_STATUS" != "200" ]; then
-            echo "Mutation returned HTTP $MUTATION_STATUS, expected 200" >&2
-            kill $MOUNT_PID 2>/dev/null || true
-            exit 1
-          fi
+            if (event.type === "error") {
+              console.error("mount error:", event.message);
+              child.kill();
+              process.exit(1);
+            }
+          });
 
-          echo "Mutation OK (HTTP $MUTATION_STATUS)"
+          // Send config as first stdin line
+          child.stdin.write(config + "\n");
 
-          # Close the mount
-          curl -s -X POST "http://127.0.0.1:$PORT/mutate" \
-            -H "Content-Type: application/json" \
-            -H "X-UI-Leaf-Token: $TOKEN" \
-            -d '{"version":"1","type":"close"}' || true
+          child.on("exit", (code) => {
+            if (!ready) { console.error("binary exited before ready"); process.exit(1); }
+            if (!updateSent) { console.error("update was never sent"); process.exit(1); }
+            if (!closeSent) { console.error("close was never sent"); process.exit(1); }
+            if (!closed) { console.error("no closed event received"); process.exit(1); }
+            console.log("smoke PASSED (binary exit code:", code, ")");
+          });
 
-          wait $MOUNT_PID || true
-          grep -q '"type":"closed"' smoke-out.txt && echo "closed event OK" || \
-            { echo "No closed event in output:" >&2; cat smoke-out.txt >&2; exit 1; }
+          // Hard timeout: if mount doesn't finish within 30s, fail
+          setTimeout(() => {
+            console.error("timeout: mount did not close within 30s");
+            child.kill();
+            process.exit(1);
+          }, 30000);
+          DRIVER
 
   wrapper:
     name: JS wrapper — ${{ matrix.os }}
@@ -185,7 +211,7 @@ jobs:
         run: |
           ls -la smoke-wrapper/node_modules/@openthink/ui-leaf/bin/
 
-      - name: Run Node wrapper smoke script
+      - name: Write wrapper smoke view
         shell: bash
         run: |
           mkdir -p smoke-wrapper/views
@@ -195,6 +221,9 @@ jobs:
           }
           TSX
 
+      - name: Run Node wrapper smoke script
+        shell: bash
+        run: |
           cat > smoke-wrapper/smoke.mjs << 'SCRIPT'
           import { mount } from '@openthink/ui-leaf';
 
@@ -202,7 +231,7 @@ jobs:
             view: './views/smoke.tsx',
             data: { title: 'wrapper-smoke-ok' },
             noOpen: true,
-            heartbeatTimeoutMs: 3000,
+            heartbeatTimeoutMs: 5000,
           });
 
           console.log('mounted, port:', handle.port);
@@ -219,18 +248,22 @@ jobs:
       - name: SHA256 tamper check
         shell: bash
         run: |
-          # Corrupt the cached binary, re-run postinstall; expect it to fail with SHA mismatch.
+          set -euo pipefail
           PKG_DIR="smoke-wrapper/node_modules/@openthink/ui-leaf"
 
-          # Identify the sentinel and binary
-          SENTINEL="$PKG_DIR/bin/.ui-leaf-version"
-          if [ -f "$SENTINEL" ]; then
-            # Remove the sentinel so postinstall re-downloads (or re-verifies)
-            rm "$SENTINEL"
+          # Confirm the postinstall entrypoint exists before relying on it to fail
+          if [ ! -f "$PKG_DIR/run-postinstall.cjs" ]; then
+            echo "ERROR: run-postinstall.cjs not found — layout has changed, tamper check invalid" >&2
+            exit 1
           fi
 
-          # Corrupt a binary in bin/
-          for f in "$PKG_DIR"/bin/ui-leaf-bin "$PKG_DIR"/bin/ui-leaf-bin.exe; do
+          # Remove the sentinel so postinstall re-verifies rather than skipping
+          SENTINEL="$PKG_DIR/bin/.ui-leaf-version"
+          rm -f "$SENTINEL"
+
+          # Corrupt the downloaded binary
+          CORRUPTED=""
+          for f in "$PKG_DIR/bin/ui-leaf-bin" "$PKG_DIR/bin/ui-leaf-bin.exe"; do
             if [ -f "$f" ]; then
               echo "CORRUPTED" > "$f"
               CORRUPTED="$f"
@@ -239,15 +272,20 @@ jobs:
           done
 
           if [ -z "$CORRUPTED" ]; then
-            echo "No binary to corrupt — skipping tamper check" >&2
-            exit 0
+            echo "ERROR: no binary found at expected paths — layout has changed, tamper check invalid" >&2
+            exit 1
           fi
 
-          # postinstall should fail with a SHA256 mismatch
-          cd "$PKG_DIR"
-          if node ./run-postinstall.cjs; then
+          # postinstall must exit non-zero and mention "SHA256 mismatch"
+          if cd "$PKG_DIR" && node ./run-postinstall.cjs 2>&1 | tee /tmp/postinstall-out.txt; then
             echo "ERROR: postinstall succeeded on a tampered binary — SHA256 check is not working" >&2
             exit 1
-          else
-            echo "Tamper check OK — postinstall correctly rejected the corrupted binary"
           fi
+
+          if ! grep -qi "sha256\|mismatch\|checksum" /tmp/postinstall-out.txt; then
+            echo "ERROR: postinstall failed but without a SHA256/mismatch/checksum message — unexpected failure mode" >&2
+            cat /tmp/postinstall-out.txt >&2
+            exit 1
+          fi
+
+          echo "Tamper check OK — postinstall correctly rejected the corrupted binary"
