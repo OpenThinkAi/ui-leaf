@@ -51,7 +51,7 @@ curl -L -o ui-leaf \
   https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/ui-leaf-darwin-arm64
 curl -L -o checksums.txt \
   https://github.com/OpenThinkAi/ui-leaf/releases/latest/download/checksums.txt
-grep ui-leaf-darwin-arm64 checksums.txt | sha256sum -c
+grep ui-leaf-darwin-arm64 checksums.txt | shasum -a 256 -c
 chmod +x ui-leaf && sudo mv ui-leaf /usr/local/bin/
 ```
 
@@ -190,8 +190,8 @@ The binary exits 0 after `closed`, 1 on internal error.
       ▼                                                                       │ (never)
 [ui-leaf binary]  ◄── mutations ──  [Browser view]                           │
       │                                    │                                  │
-      └── data updates ──────────────────► │     fetch("https://…") BLOCKED  ╳
-                                           └─────────────────────────────────╯
+      └── data updates ──────────────────► │     fetch("https://…") BLOCKED
+                                           └──────────────────────────────────
 ```
 
 - The CLI holds the credentials. The view never sees auth tokens, never knows the
@@ -214,16 +214,18 @@ The binary exits 0 after `closed`, 1 on internal error.
 The binary forwards it to the browser via a server-sent event; the view re-renders
 with in-page state preserved.
 
-**CSP opt-out.** If the view legitimately needs external network access:
+**CSP opt-out.** If the view legitimately needs external network access, add a `csp`
+key to the config object:
 
 ```json
-{"view": "report", "viewsRoot": "...", "data": {}, "csp": "off"}
+{"version": "1", "view": "report", "viewsRoot": "...", "data": {}, "csp": "off"}
 ```
 
 Or a targeted CSP string:
 
 ```json
-{"csp": "default-src 'self'; connect-src 'self' https://sentry.io; form-action 'self';"}
+{"version": "1", "view": "report", "viewsRoot": "...", "data": {},
+ "csp": "default-src 'self'; connect-src 'self' https://sentry.io; form-action 'self';"}
 ```
 
 ### DNS-rebinding defence
@@ -237,7 +239,8 @@ If you reach the server through a custom `/etc/hosts` alias, include it in
 `allowedHosts`:
 
 ```json
-{"allowedHosts": ["my-app.local"]}
+{"version": "1", "view": "...", "viewsRoot": "...", "data": {},
+ "allowedHosts": ["my-app.local"]}
 ```
 
 Be deliberate — every name you add is a potential rebinding target. Don't add public
