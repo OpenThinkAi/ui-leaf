@@ -17,10 +17,12 @@ JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). 
 full design doc (`docs/design.md`) ships alongside the binary release.
 
 > **On v0.8.x?** The current npm-published package (`@openthink/ui-leaf@0.8.x`) is
-> the Node SDK with `mount()`, `dataLoader`, and `ViewProps` exports. The
-> [v0.8.0 tag README](https://github.com/OpenThinkAi/ui-leaf/blob/v0.8.0/README.md)
-> documents that API. v1.0.0 replaces the SDK with a thin wrapper that spawns the
-> standalone binary — no in-process Node runtime required.
+> the Node SDK with `mount()`, `dataLoader`, and `ViewProps` exports. Those APIs are
+> documented in the README bundled in the npm tarball — install any v0.8.x version
+> and read `node_modules/@openthink/ui-leaf/README.md`, or view it on
+> [npmjs.com/package/@openthink/ui-leaf](https://www.npmjs.com/package/@openthink/ui-leaf)
+> before v1.0.0 publishes. v1.0.0 replaces the SDK with a thin wrapper that spawns
+> the standalone binary.
 
 ## Install
 
