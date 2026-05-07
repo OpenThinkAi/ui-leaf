@@ -4,9 +4,8 @@ Customizable browser views, on demand, for any CLI.
 
 `ui-leaf` is a self-contained binary. Any program that can spawn a subprocess and
 read/write line-delimited JSON on stdio can drive a browser view — Bash scripts,
-Python CLIs, Rust tools, Node programs, AI agents. No Node.js, no Bun, no runtime
-required on the end user's machine. A thin JS wrapper for ergonomic Node use ships
-with v1.0.0.
+Python CLIs, Rust tools, Node programs, AI agents. A thin JS wrapper for ergonomic
+Node use ships with v1.0.0.
 
 The view is your code — a `.tsx` file in your project's `views/` directory. That's
 the **bring-your-own-view** part.
@@ -16,6 +15,12 @@ the **bring-your-own-view** part.
 `v1.0.0 — release in progress`. Binary architecture and stdio protocol are stable.
 JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). The
 full design doc (`docs/design.md`) ships alongside the binary release.
+
+> **On v0.8.x?** The current npm-published package (`@openthink/ui-leaf@0.8.x`) is
+> the Node SDK with `mount()`, `dataLoader`, and `ViewProps` exports. The
+> [v0.8.0 tag README](https://github.com/OpenThinkAi/ui-leaf/blob/v0.8.0/README.md)
+> documents that API. v1.0.0 replaces the SDK with a thin wrapper that spawns the
+> standalone binary — no in-process Node runtime required.
 
 ## Install
 
@@ -43,7 +48,8 @@ Grab the right binary from
 | Windows x64 | `ui-leaf-windows-x64.exe` |
 
 Verify the SHA256 against `checksums.txt` from the same release, then make the
-binary executable:
+binary executable. **No Node.js or other runtime required** — the binary is
+fully self-contained.
 
 ```bash
 # macOS Apple Silicon example:
@@ -120,8 +126,8 @@ for line in proc.stdout:
     if event["type"] == "ready":
         print(f"view ready at {event['url']}", file=sys.stderr)
     elif event["type"] == "mutate":
-        # run the mutation, write back the result
-        result = {"type": "result", "id": event["id"], "value": {"ok": True}}
+        # run the mutation, write back the result (version field required)
+        result = {"version": "1", "type": "result", "id": event["id"], "value": {"ok": True}}
         proc.stdin.write(json.dumps(result) + "\n")
         proc.stdin.flush()
     elif event["type"] == "closed":
