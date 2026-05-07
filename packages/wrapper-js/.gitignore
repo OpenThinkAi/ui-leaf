@@ -1,4 +1,4 @@
 dist/
-bin/ui-leaf
-bin/ui-leaf.exe
+bin/ui-leaf-bin
+bin/ui-leaf-bin.exe
 bin/.ui-leaf-version

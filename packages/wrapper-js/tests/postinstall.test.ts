@@ -61,25 +61,25 @@ async function startTestServer(
 describe("PLATFORM_MAP", () => {
   test("darwin-arm64 → ui-leaf-darwin-arm64", () => {
     expect(PLATFORM_MAP["darwin-arm64"]?.artifact).toBe("ui-leaf-darwin-arm64");
-    expect(PLATFORM_MAP["darwin-arm64"]?.binary).toBe("ui-leaf");
+    expect(PLATFORM_MAP["darwin-arm64"]?.binary).toBe("ui-leaf-bin");
   });
   test("darwin-x64 → ui-leaf-darwin-x64", () => {
     expect(PLATFORM_MAP["darwin-x64"]?.artifact).toBe("ui-leaf-darwin-x64");
-    expect(PLATFORM_MAP["darwin-x64"]?.binary).toBe("ui-leaf");
+    expect(PLATFORM_MAP["darwin-x64"]?.binary).toBe("ui-leaf-bin");
   });
   test("linux-x64 → ui-leaf-linux-x64", () => {
     expect(PLATFORM_MAP["linux-x64"]?.artifact).toBe("ui-leaf-linux-x64");
-    expect(PLATFORM_MAP["linux-x64"]?.binary).toBe("ui-leaf");
+    expect(PLATFORM_MAP["linux-x64"]?.binary).toBe("ui-leaf-bin");
   });
   test("linux-arm64 → ui-leaf-linux-arm64", () => {
     expect(PLATFORM_MAP["linux-arm64"]?.artifact).toBe("ui-leaf-linux-arm64");
-    expect(PLATFORM_MAP["linux-arm64"]?.binary).toBe("ui-leaf");
+    expect(PLATFORM_MAP["linux-arm64"]?.binary).toBe("ui-leaf-bin");
   });
   test("win32-x64 → ui-leaf-windows-x64.exe (with .exe binary)", () => {
     expect(PLATFORM_MAP["win32-x64"]?.artifact).toBe(
       "ui-leaf-windows-x64.exe"
     );
-    expect(PLATFORM_MAP["win32-x64"]?.binary).toBe("ui-leaf.exe");
+    expect(PLATFORM_MAP["win32-x64"]?.binary).toBe("ui-leaf-bin.exe");
   });
   test("covers exactly 5 targets", () => {
     expect(Object.keys(PLATFORM_MAP)).toHaveLength(5);
