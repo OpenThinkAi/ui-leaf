@@ -159,8 +159,7 @@ proc.wait()
 
 The full worked example — including mutation handling and graceful shutdown — is
 in [`examples/python/counter.py`](./examples/python/counter.py). It uses only
-the standard library (`asyncio`, `json`, `signal`) and is runnable with any
-Python 3.7+ interpreter.
+the standard library (`asyncio`, `json`, `signal`) and requires Python 3.9+.
 
 ### Node (JS wrapper)
 
@@ -187,7 +186,8 @@ console.log(`view ready at ${view.url}`);
 await view.update({ data: { initialCount: count } });
 
 // Wait for the binary to close (browser tab closed or view.close() called).
-await view.closed;
+// `reason` is "caller" | "signal" | "error".
+const { reason } = await view.closed;
 ```
 
 The full worked example — including `view.setView()` and `view.close()` — is

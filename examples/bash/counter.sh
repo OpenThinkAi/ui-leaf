@@ -77,10 +77,12 @@ CONFIG=$(printf \
 json_field() {
   local json="$1" key="$2"
   if command -v jq &>/dev/null; then
-    printf '%s' "$json" | jq -r --arg k "$key" '.[$k] // empty'
+    # Herestring avoids piping through printf so % characters in the JSON
+    # are not treated as format specifiers by any intermediate shell layer.
+    jq -r --arg k "$key" '.[$k] // empty' <<<"$json"
   else
     # Illustrative fallback — handles simple unescaped strings and integers.
-    printf '%s' "$json" | sed -nE "s/.*\"${key}\":\"?([^\",}]+)\"?.*/\1/p"
+    sed -nE "s/.*\"${key}\":\"?([^\",}]+)\"?.*/\1/p" <<<"$json"
   fi
 }
 
@@ -121,9 +123,9 @@ while IFS= read -r line <&"${UILEAF[0]}"; do
       # `by` is nested under `args`; jq reads it correctly; sed fallback reads
       # the raw value from the flattened line (works for simple integer args).
       if command -v jq &>/dev/null; then
-        BY=$(printf '%s' "$line" | jq -r '.args.by // 1')
+        BY=$(jq -r '.args.by // 1' <<<"$line")
       else
-        BY=$(printf '%s' "$line" | sed -nE 's/.*"by":(-?[0-9]+).*/\1/p')
+        BY=$(sed -nE 's/.*"by":(-?[0-9]+).*/\1/p' <<<"$line")
         BY="${BY:-1}"
       fi
 

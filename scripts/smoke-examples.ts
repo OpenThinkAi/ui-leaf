@@ -35,7 +35,13 @@ function hostTarget(): string {
 
 const binSuffix = process.platform === "win32" ? ".exe" : "";
 const distBin = resolve(REPO_ROOT, "dist", `ui-leaf-${hostTarget()}${binSuffix}`);
-// Fall back to the node-run CLI for local development (no compiled binary needed).
+if (!existsSync(distBin)) {
+  // In CI the build step runs before this; locally you may not have compiled yet.
+  console.warn(
+    `warn: dist binary not found at ${distBin}; falling back to "ui-leaf" on PATH.\n` +
+    `      Run "bun run build:binaries" first to exercise the compiled binary.`,
+  );
+}
 const UI_LEAF_BIN = existsSync(distBin) ? distBin : "ui-leaf";
 
 const VIEWS_ROOT = resolve(REPO_ROOT, "examples", "views");

@@ -29,5 +29,7 @@ counter, and writes the result back to the binary. Close the tab to exit.
 
 Standard library only: `asyncio`, `json`, `os`, `signal`, `sys`.
 
-Python 3.10+ is required (`asyncio.TaskGroup` and `match` are not used;
-`asyncio.create_subprocess_exec` is available since Python 3.5).
+Python 3.9+ is required (`asyncio.create_subprocess_exec` and f-strings are
+available since earlier versions; `asyncio.get_running_loop()` requires 3.7+,
+but 3.9 is the practical minimum for `asyncio.Task` type hints and is widely
+available).

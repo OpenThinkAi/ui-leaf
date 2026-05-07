@@ -58,7 +58,7 @@ async def main() -> None:
     await proc.stdin.drain()
     print("[python] sent config; waiting for events…", file=sys.stderr)
 
-    ready_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    ready_future = asyncio.get_running_loop().create_future()  # Future[str]
     closed_event = asyncio.Event()
 
     async def send(msg: dict) -> None:

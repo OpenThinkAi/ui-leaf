@@ -62,15 +62,12 @@ if (smoke) {
 view.onDisconnect(() => console.error("[node] browser tab disconnected"));
 view.onReconnect(() => console.error("[node] browser tab reconnected"));
 
-// Demonstrates view.reopen() — re-launch the browser tab if the user closes it.
-// In a real app you might not want this; it's shown here for API completeness.
-view.onDisconnect(() => {
-  // Allow one reconnect attempt before re-opening.
-});
+// view.reopen() re-launches the browser tab after a disconnect. Call it from
+// an onDisconnect handler if you want automatic re-open:
+//   view.onDisconnect(() => view.reopen());
 
-// Demonstrates view.setView() — swap the view source at runtime.
-// Uncomment and supply a TSX string to try a hot-swap:
-//
+// view.setView(source) hot-swaps the view source at runtime. Supply a TSX
+// string to try it:
 //   await view.setView(`
 //     export default function Updated() {
 //       return <div style={{padding:"2rem"}}>View swapped!</div>;
