@@ -5,7 +5,7 @@
   "workspaces": ["packages/*", "examples/node"],
   "scripts": {
     "prepare": "bun run scripts/build-react-bundles.ts",
-    "build": "bun run --filter '@openthink/ui-leaf-cli' build",
+    "build": "bun run scripts/build-react-bundles.ts",
     "build:binaries": "bun run scripts/build-binaries.ts",
     "build:wrapper": "bun run --filter '@openthink/ui-leaf' build",
     "dev": "bun run --filter '@openthink/ui-leaf-cli' dev",
