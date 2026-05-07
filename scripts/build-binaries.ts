@@ -142,9 +142,27 @@ function formatSize(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+async function spawnPrebundle(): Promise<void> {
+  const script = join(REPO_ROOT, "scripts/build-react-bundles.ts");
+  console.log("Pre-bundling React for binary embed…");
+  const child = spawn("bun", ["run", script], {
+    cwd: REPO_ROOT,
+    stdio: "inherit",
+  });
+  await new Promise<void>((res, rej) => {
+    child.on("error", rej);
+    child.on("close", (code) => {
+      if (code === 0) res();
+      else rej(new Error(`build-react-bundles.ts exited with code ${code}`));
+    });
+  });
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const selected = parseTargetsFlag(argv);
+
+  await spawnPrebundle();
 
   await rm(DIST_DIR, { recursive: true, force: true });
   await mkdir(DIST_DIR, { recursive: true });
