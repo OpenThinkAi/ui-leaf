@@ -473,8 +473,8 @@ describe("multiple in-flight mutations", () => {
       },
     );
     await view.close();
-    // Both mutations were dispatched; order may vary (async) but both must fire.
-    expect(dispatched.sort((a, b) => a - b)).toEqual([10, 20]);
+    // Both mutations were dispatched; protocol does not guarantee ordering.
+    expect([...dispatched].sort((a, b) => a - b)).toEqual([10, 20]);
   });
 });
 

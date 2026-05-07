@@ -308,7 +308,10 @@ describe("malformed stdout handling", () => {
     handle.send({ version: "1", type: "close" });
     await handle.exited;
     expect(errors.length).toBeGreaterThan(0);
-    expect((errors[0] as { message: string }).message).toContain("malformed JSON");
+    const e0 = errors[0]!;
+    expect(e0.type).toBe("error");
+    // OutboundError is the only member of OutboundMessage with `message`.
+    expect((e0 as { type: "error"; message: string }).message).toContain("malformed JSON");
   });
 });
 
