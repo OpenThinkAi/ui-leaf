@@ -111,7 +111,7 @@ jobs:
         run: |
           # Node driver script: spawns binary, sends config + update + close via
           # stdin IPC. No token needed — stdin is the trusted parent channel.
-          node - "${{ matrix.binary }}" << 'DRIVER'
+          node --input-type=module - "${{ matrix.binary }}" << 'DRIVER'
           import { spawn } from "node:child_process";
           import { createInterface } from "node:readline";
 
@@ -132,6 +132,13 @@ jobs:
           let updateSent = false;
           let closeSent = false;
           let closed = false;
+
+          // Hard timeout — cancelled on the success path so it never fires false-positive.
+          const hardTimeout = setTimeout(() => {
+            console.error("timeout: mount did not close within 30s");
+            child.kill();
+            process.exit(1);
+          }, 30000);
 
           rl.on("line", (line) => {
             let event;
@@ -173,15 +180,10 @@ jobs:
             if (!updateSent) { console.error("update was never sent"); process.exit(1); }
             if (!closeSent) { console.error("close was never sent"); process.exit(1); }
             if (!closed) { console.error("no closed event received"); process.exit(1); }
+            clearTimeout(hardTimeout);
             console.log("smoke PASSED (binary exit code:", code, ")");
+            process.exit(0);
           });
-
-          // Hard timeout: if mount doesn't finish within 30s, fail
-          setTimeout(() => {
-            console.error("timeout: mount did not close within 30s");
-            child.kill();
-            process.exit(1);
-          }, 30000);
           DRIVER
 
   wrapper:

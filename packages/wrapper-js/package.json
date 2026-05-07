@@ -35,7 +35,7 @@
   "scripts": {
     "build": "tsup",
     "postinstall": "node ./run-postinstall.cjs",
-    "prepack": "node -e \"require('node:fs').copyFileSync('bin/ui-leaf-bin.stub','bin/ui-leaf-bin')\""
+    "prepack": "node -e \"const fs=require('node:fs');fs.copyFileSync('bin/ui-leaf-bin.stub','bin/ui-leaf-bin');fs.copyFileSync('../../README.md','README.md');fs.copyFileSync('../../LICENSE','LICENSE')\""
   },
   "bin": {
     "ui-leaf": "./bin/ui-leaf"
@@ -43,7 +43,9 @@
   "files": [
     "dist",
     "bin",
-    "run-postinstall.cjs"
+    "run-postinstall.cjs",
+    "README.md",
+    "LICENSE"
   ],
   "devDependencies": {
     "tsup": "^8.4.0"
