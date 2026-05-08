@@ -281,16 +281,22 @@ jobs:
           SENTINEL="$PKG_DIR/bin/.ui-leaf-version"
           rm -f "$SENTINEL"
 
-          # Pick the binary that's actually present on this platform.
-          BIN=""
-          for f in "$PKG_DIR/bin/ui-leaf-bin" "$PKG_DIR/bin/ui-leaf-bin.exe"; do
-            if [ -f "$f" ]; then
-              BIN="$f"
-              break
-            fi
-          done
-          if [ -z "$BIN" ]; then
-            echo "ERROR: no binary found at expected paths — layout has changed, check invalid" >&2
+          # Pick the actual cross-compiled binary, not the shims.
+          # Layout per AGT-133:
+          #   POSIX  → bin/ui-leaf-bin              (the real binary)
+          #   Windows → bin/ui-leaf-bin.exe         (the real binary, ~118 MB)
+          #             bin/ui-leaf-bin             (427-byte JS shim — NOT the binary)
+          #             bin/ui-leaf                 (npm bin entry, JS launcher)
+          # The earlier loop "first match wins" picked ui-leaf-bin on Windows
+          # (the shim), which the postinstall doesn't re-write — so corruption
+          # tests appeared to fail when the heal actually succeeded on .exe.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BIN="$PKG_DIR/bin/ui-leaf-bin.exe"
+          else
+            BIN="$PKG_DIR/bin/ui-leaf-bin"
+          fi
+          if [ ! -f "$BIN" ]; then
+            echo "ERROR: binary not found at $BIN — layout has changed, check invalid" >&2
             exit 1
           fi
 
