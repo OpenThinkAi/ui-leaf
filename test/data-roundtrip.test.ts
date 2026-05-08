@@ -31,7 +31,10 @@ describe("data round-trip", () => {
         const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
         if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
 
-        const ctx = vm.createContext({ window: {} });
+        const ctx = vm.createContext({
+          window: { location: { hash: "", pathname: "/", search: "" } },
+          history: { replaceState: () => {} },
+        });
         vm.runInContext(match[1], ctx);
 
         // Serialize from the vm context to avoid cross-realm object comparison.

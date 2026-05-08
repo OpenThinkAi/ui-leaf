@@ -11,13 +11,17 @@ describe("dataLoader", () => {
     async () => {
       const secret = { message: "sensitive", amount: 42 };
 
+      let capturedUrl = "";
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         dataLoader: () => Promise.resolve(secret),
+        _opener: async (url) => {
+          capturedUrl = url;
+        },
       });
 
       try {
@@ -27,7 +31,10 @@ describe("dataLoader", () => {
         const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
         if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
 
-        const ctx = vm.createContext({ window: {} });
+        const ctx = vm.createContext({
+          window: { location: { hash: "", pathname: "/", search: "" } },
+          history: { replaceState: () => {} },
+        });
         vm.runInContext(match[1], ctx);
 
         // AC #3: inlined script must NOT have a data field.
@@ -38,9 +45,12 @@ describe("dataLoader", () => {
         expect(hasDataField).toBe(false);
 
         // AC #1: /api/data with the bearer token returns the loader's value.
-        const token = vm.runInContext("window.__UI_LEAF__.token", ctx) as string;
+        // Token is delivered via URL fragment to the opener, never inlined.
+        const tokenMatch = /[#&]token=([^&#]*)/.exec(capturedUrl);
+        if (!tokenMatch?.[1]) throw new Error("token not found in opener URL");
+        const token = decodeURIComponent(tokenMatch[1]);
         const dataResp = await fetch(`${view.url}/api/data`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { "X-UI-Leaf-Token": token },
         });
         expect(dataResp.status).toBe(200);
         const body = await dataResp.json();

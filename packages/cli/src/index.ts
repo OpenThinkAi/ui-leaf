@@ -183,6 +183,13 @@ export interface MountOptions {
    * Never set this in production.
    */
   _heartbeatCheckIntervalMs?: number;
+  /**
+   * Test seam: replace the browser-open call. Receives the launch URL with
+   * the token fragment (`http://127.0.0.1:<port>/#token=<hex>`). Lets tests
+   * capture the per-launch token without needing a real browser.
+   * Never set this in production.
+   */
+  _opener?: (url: string) => Promise<void>;
 }
 
 export interface MountedView {
@@ -262,6 +269,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     allowedHosts: opts.allowedHosts,
     silent: opts.silent,
     _heartbeatCheckIntervalMs: opts._heartbeatCheckIntervalMs,
+    _opener: opts._opener,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {

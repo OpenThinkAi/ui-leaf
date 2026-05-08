@@ -30,7 +30,10 @@ describe("prototype pollution hardening", () => {
         const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
         if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
 
-        const ctx = vm.createContext({ window: {} });
+        const ctx = vm.createContext({
+          window: { location: { hash: "", pathname: "/", search: "" } },
+          history: { replaceState: () => {} },
+        });
         vm.runInContext(match[1], ctx);
 
         // Assertion 1 (AC #2a): prototype must be the plain Object prototype,
