@@ -31,7 +31,7 @@ Each binary's SHA-256 digest appears in `checksums.txt`; the JS wrapper verifies
 
 **Library mode dropped.** `import { mount } from '@openthink/ui-leaf'` no longer runs the server in-process. The JS wrapper (`@openthink/ui-leaf`) spawns the binary as a child process and translates events over the stdio IPC protocol. The call signature is compatible with v0.8.x callers; the runtime path is entirely different.
 
-See §3–4 of `docs/design.md` for architecture details.
+See the [README](README.md) and [`docs/ipc-protocol.md`](docs/ipc-protocol.md) for architecture details.
 
 ---
 
@@ -45,19 +45,19 @@ See §3–4 of `docs/design.md` for architecture details.
 
 **CSP `"strict"` by default.** The strict preset locks `default-src 'self'`, `form-action 'self'`, and related directives, enforcing the broker principle at the browser level. Override with `csp: "off"` or a custom CSP string only if your view needs external resources.
 
-**`heartbeatTimeoutMs` 5000ms.** Matches the expected behavior for programmatic consumers that spawn mounts and react to results quickly. Increase if your view is interactive and users may idle.
+**`heartbeatTimeoutMs` 5000ms.** Matches the expected behavior for programmatic consumers that spawn mounts and react to results quickly. Set to `75000` to restore the v0.8.x default, or higher for interactive views where users may idle.
 
 **Token in URL fragment.** The localhost auth token is passed in the URL fragment (`#token=...`) when the browser opens. A bootstrap script reads and clears it from the URL bar; subsequent requests carry it in the `X-UI-Leaf-Token` header. The token never appears in the HTTP response body.
 
-See §3.4, §10 of `docs/design.md`.
+See the [README security sections](README.md) for details on the token-in-fragment and CSP configuration.
 
 ---
 
 ### New protocol features (IPC v1)
 
-**Versioned messages.** Every inbound and outbound IPC message now carries `"version": "1"`. Consumers must include this field. The full JSON Schema is published in `schema/ipc.json` and documented in `docs/ipc-protocol.md`.
+**Versioned messages.** Every inbound and outbound IPC message now carries `"version": "1"`. Consumers must include this field. The full JSON Schema lives at `packages/cli/schema/ipc.json` in this repo and is documented in [`docs/ipc-protocol.md`](docs/ipc-protocol.md).
 
-**New inbound messages:**
+**New inbound messages** (additive — existing v0.8.x raw-protocol consumers receive no breaking change from these additions):
 
 | Message | Effect |
 |---|---|
@@ -70,7 +70,7 @@ See §3.4, §10 of `docs/design.md`.
 
 **SSE events channel.** `GET /events` streams server-sent events for data-push, view-reload triggers, and close notices. The browser view subscribes and reacts without polling.
 
-See §3.6, §5.1 of `docs/design.md`.
+See [`docs/ipc-protocol.md`](docs/ipc-protocol.md) for the full protocol reference.
 
 ---
 
