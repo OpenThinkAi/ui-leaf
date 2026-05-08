@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
 import { mount } from "../packages/cli/src/index.ts";
-import * as vm from "node:vm";
 import { join } from "node:path";
 
 const VIEWS_ROOT = join(import.meta.dir, "fixtures");
@@ -13,20 +12,27 @@ const FAST_OPTS = {
   _heartbeatCheckIntervalMs: 50,
 } as const;
 
-async function getToken(url: string): Promise<string> {
-  const resp = await fetch(url);
-  const html = await resp.text();
-  const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
-  if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
-  const ctx = vm.createContext({ window: {} });
-  vm.runInContext(match[1], ctx);
-  return vm.runInContext("window.__UI_LEAF__.token", ctx) as string;
+// Capture the launch URL via the _opener test seam and pull the token from
+// its fragment. The token is delivered via URL fragment to the opener and
+// never inlined into the HTML body, so this is the only way to get it.
+function tokenCapture(): { capture: (url: string) => Promise<void>; getToken: () => string } {
+  let captured = "";
+  return {
+    capture: async (url: string) => {
+      captured = url;
+    },
+    getToken: () => {
+      const m = /[#&]token=([^&#]*)/.exec(captured);
+      if (!m?.[1]) throw new Error("token not found in opener URL");
+      return decodeURIComponent(m[1]);
+    },
+  };
 }
 
 async function sendHeartbeat(url: string, token: string): Promise<void> {
   await fetch(`${url}/heartbeat`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "X-UI-Leaf-Token": token },
   });
 }
 
@@ -52,17 +58,19 @@ describe("disconnect/reconnect lifecycle", () => {
   test(
     "AC #1: heartbeat timeout emits disconnected but does not terminate mount",
     async () => {
+      const tc = tokenCapture();
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         ...FAST_OPTS,
+        _opener: tc.capture,
       });
 
       try {
-        const token = await getToken(view.url);
+        const token = tc.getToken();
         // Trigger connected state, then go silent.
         await sendHeartbeat(view.url, token);
 
@@ -87,13 +95,15 @@ describe("disconnect/reconnect lifecycle", () => {
   test(
     "AC #3: resuming heartbeats after disconnect emits reconnected",
     async () => {
+      const tc = tokenCapture();
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         ...FAST_OPTS,
+        _opener: tc.capture,
       });
 
       const events: string[] = [];
@@ -101,7 +111,7 @@ describe("disconnect/reconnect lifecycle", () => {
       view.on("reconnected", () => events.push("reconnected"));
 
       try {
-        const token = await getToken(view.url);
+        const token = tc.getToken();
         await sendHeartbeat(view.url, token);
 
         await waitForEvent(view, "disconnected");
@@ -123,13 +133,15 @@ describe("disconnect/reconnect lifecycle", () => {
   test(
     "AC #4: multiple disconnect/reconnect cycles each emit the right events",
     async () => {
+      const tc = tokenCapture();
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         ...FAST_OPTS,
+        _opener: tc.capture,
       });
 
       const events: string[] = [];
@@ -137,7 +149,7 @@ describe("disconnect/reconnect lifecycle", () => {
       view.on("reconnected", () => events.push("reconnected"));
 
       try {
-        const token = await getToken(view.url);
+        const token = tc.getToken();
 
         for (let i = 0; i < 2; i++) {
           await sendHeartbeat(view.url, token);
@@ -164,17 +176,19 @@ describe("disconnect/reconnect lifecycle", () => {
   test(
     "AC #5: view swap applied while disconnected is served after reconnect",
     async () => {
+      const tc = tokenCapture();
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         ...FAST_OPTS,
+        _opener: tc.capture,
       });
 
       try {
-        const token = await getToken(view.url);
+        const token = tc.getToken();
         await sendHeartbeat(view.url, token);
 
         await waitForEvent(view, "disconnected");
@@ -207,20 +221,22 @@ export default function V() { return createElement("div", { id: "${MARKER}" }); 
   test(
     "AC #8: tab close → disconnected (no closed); reopen → reconnected; caller close → closed",
     async () => {
+      const tc = tokenCapture();
       const view = await mount({
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
+        openBrowser: true,
         silent: true,
         port: 0,
         ...FAST_OPTS,
+        _opener: tc.capture,
       });
 
       const events: string[] = [];
       view.on("disconnected", () => events.push("disconnected"));
       view.on("reconnected", () => events.push("reconnected"));
 
-      const token = await getToken(view.url);
+      const token = tc.getToken();
       await sendHeartbeat(view.url, token);
 
       // Step 1: tab goes silent → disconnected.

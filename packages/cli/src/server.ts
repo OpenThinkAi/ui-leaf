@@ -416,7 +416,10 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
           });
         }
         if (!checkAuth(req, token)) {
-          return new Response("", { status: 401, headers });
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { ...headers, "Content-Type": "application/json" },
+          });
         }
         return new Response(JSON.stringify(viewState.data !== undefined ? viewState.data : null), {
           status: 200,
