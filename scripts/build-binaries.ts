@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,6 +24,19 @@ const TARGETS: readonly Target[] = [
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO_ROOT, "packages/cli/src/cli.ts");
 const DIST_DIR = join(REPO_ROOT, "dist");
+
+// Read the published version from wrapper-js's package.json so that
+// `ui-leaf --version` reports the correct number. The cli.ts handler reads
+// this via globalThis.__UI_LEAF_VERSION__ which we inject below via --define.
+async function readPublishedVersion(): Promise<string> {
+  const pkgPath = join(REPO_ROOT, "packages/wrapper-js/package.json");
+  const raw = await readFile(pkgPath, "utf8");
+  const pkg = JSON.parse(raw) as { version?: string };
+  if (typeof pkg.version !== "string") {
+    throw new Error(`packages/wrapper-js/package.json: missing or non-string "version"`);
+  }
+  return pkg.version;
+}
 
 interface BuildOutcome {
   target: Target;
@@ -57,13 +70,15 @@ function parseTargetsFlag(argv: readonly string[]): readonly Target[] {
   return selected;
 }
 
-function buildOne(target: Target): Promise<BuildOutcome> {
+function buildOne(target: Target, version: string): Promise<BuildOutcome> {
   const outfile = join(DIST_DIR, target.filename);
   const args = [
     "build",
     "--compile",
     `--target=bun-${target.id}`,
     "--minify",
+    `--define`,
+    `globalThis.__UI_LEAF_VERSION__=${JSON.stringify(version)}`,
     `--outfile=${outfile}`,
     ENTRY,
   ];
@@ -164,14 +179,16 @@ async function main(): Promise<void> {
 
   await spawnPrebundle();
 
+  const publishedVersion = await readPublishedVersion();
+
   await rm(DIST_DIR, { recursive: true, force: true });
   await mkdir(DIST_DIR, { recursive: true });
 
-  console.log(`Building ${selected.length} target(s) → ${DIST_DIR}`);
+  console.log(`Building ${selected.length} target(s) at v${publishedVersion} → ${DIST_DIR}`);
   const outcomes: BuildOutcome[] = [];
   for (const target of selected) {
     process.stdout.write(`  ${target.id} … `);
-    const outcome = await buildOne(target);
+    const outcome = await buildOne(target, publishedVersion);
     outcomes.push(outcome);
     if (outcome.ok) {
       console.log(`ok (${formatDuration(outcome.durationMs)}, ${formatSize(outcome.sizeBytes)})`);

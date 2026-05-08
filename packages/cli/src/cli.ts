@@ -92,11 +92,17 @@ if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
 }
 
 if (args[0] === "--version" || args[0] === "-v") {
-  // Read version from package.json shipped alongside this binary.
-  const { createRequire } = await import("node:module");
-  const require = createRequire(import.meta.url);
-  const pkg = require("../package.json") as { version: string };
-  process.stdout.write(`${pkg.version}\n`);
+  // Build-time-injected version string (see scripts/build-binaries.ts).
+  // We inline at compile time rather than reading package.json at runtime
+  // because `bun build --compile` artifacts have no accessible package.json
+  // on the user's machine — `createRequire("../package.json")` fails inside
+  // the bunfs virtual filesystem (this caused v1.0.0/v1.0.1 --version to
+  // crash for fresh-installs; v1.0.2 hotfix). In dev (no compile step), the
+  // define is absent and we fall back to "0.0.0-dev" so cli.ts doesn't crash.
+  // biome-ignore lint/suspicious/noExplicitAny: build-time global inject
+  const injected = (globalThis as any).__UI_LEAF_VERSION__;
+  const VERSION = typeof injected === "string" ? injected : "0.0.0-dev";
+  process.stdout.write(`${VERSION}\n`);
   process.exit(0);
 }
 
