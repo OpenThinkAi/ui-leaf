@@ -2,19 +2,23 @@
 // Permanent CLI shim. Postinstall writes the native binary to bin/ui-leaf-bin
 // (or bin/ui-leaf-bin.exe on Windows); this file is never replaced.
 // npm's bin-linker symlinks this file into node_modules/.bin/ui-leaf.
-"use strict";
-const { execFileSync } = require("node:child_process");
-const { existsSync } = require("node:fs");
-const path = require("node:path");
+//
+// ESM file (the wrapper-js package is "type": "module"). Avoid require/__dirname.
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const binaryName =
   process.platform === "win32" ? "ui-leaf-bin.exe" : "ui-leaf-bin";
-const binaryPath = path.join(__dirname, binaryName);
+const binaryPath = path.join(here, binaryName);
 
 if (!existsSync(binaryPath)) {
   process.stderr.write(
     "ui-leaf: binary not installed. To fix:\n" +
-      "  • Re-run postinstall: npm rebuild @openthink/ui-leaf-wrapper\n" +
+      "  • Re-run postinstall: npm rebuild @openthink/ui-leaf\n" +
       "  • Or point at a local binary: UI_LEAF_BINARY_PATH=/path/to/ui-leaf npm install\n"
   );
   process.exit(1);
@@ -23,5 +27,5 @@ if (!existsSync(binaryPath)) {
 try {
   execFileSync(binaryPath, process.argv.slice(2), { stdio: "inherit" });
 } catch (err) {
-  process.exit((err && err.status) != null ? err.status : 1);
+  process.exit(err && err.status != null ? err.status : 1);
 }
