@@ -82,13 +82,24 @@ function addNamedExports(bundledEsm: string): string {
   // Replace `export default require_X()` with:
   //   var __cjs_exports = require_X();       — call once, cache
   //   export { __cjs_exports as default };   — preserve default export
-  //   var { a, b, ... } = __cjs_exports;     — destructure named exports
-  //   export { a, b, ... };                  — expose as named exports
+  //   var { a: _ne_a, ... } = __cjs_exports; — destructure into prefixed locals
+  //   export { _ne_a as a, ... };            — re-export under original names
+  //
+  // The `_ne_` prefix avoids collision with top-level identifiers Bun's CJS
+  // shim hoists out of the bundled module body. React's source declares
+  // names like `function isValidElement(object) { ... }` at module scope;
+  // a plain `var {isValidElement} = __cjs_exports` then re-declares the
+  // same identifier in the same scope, which is a SyntaxError under
+  // strict mode (and `<script type="module">` is always strict). Renaming
+  // the destructured locals sidesteps the collision while preserving the
+  // public named-export contract consumers depend on.
+  const destructured = names.map((n) => `${n}:_ne_${n}`).join(",");
+  const exported = names.map((n) => `_ne_${n} as ${n}`).join(",");
   const replacement =
     `var __cjs_exports=${requireFnName}();` +
     `export{__cjs_exports as default};` +
-    `var{${names.join(",")}}=__cjs_exports;` +
-    `export{${names.join(",")}};`;
+    `var{${destructured}}=__cjs_exports;` +
+    `export{${exported}};`;
 
   return bundledEsm.replace(
     /export default \w+\(\);?\s*$/,
