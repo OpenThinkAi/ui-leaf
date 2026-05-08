@@ -37,6 +37,8 @@ See the [README](README.md) and [`docs/ipc-protocol.md`](docs/ipc-protocol.md) f
 
 ### Default behavior changes
 
+Upgrading from `1.0.0-rc.*`? Behavior is unchanged from rc.2; only the version string changes. The table below compares v0.8.x (the last stable npm release before this one):
+
 | Setting | v0.8.x default | v1.0.0 default |
 |---|---|---|
 | `csp` | `"off"` | `"strict"` |
@@ -81,7 +83,7 @@ The following are explicitly deferred to v1.1 and later:
 - **Detached mounts** — caller exits, mount stays alive. Requires a mount registry (`list`/`send`/`close`/`logs` subcommands) and a unix-socket reconnect path.
 - **Language wrappers for Python, Rust, Go** — the IPC schema (`schema/ipc.json`) is designed to support them; only the JS wrapper ships in v1.0.0.
 - **HMR** — full reload only in v1.0.0; HMR requires bundler-level support not available in the current stack.
-- **Multi-window mounts**
+- **Multi-window mounts** — a single `mount()` call opens one browser window; multiple concurrent windows from a single spawn require additional state management not in scope for v1.0.
 - **Plugin system / advanced CSS pipeline** (PostCSS, Tailwind JIT) — on demand in a v1.x release.
 
 ---
@@ -92,7 +94,7 @@ The following are explicitly deferred to v1.1 and later:
 2. If you are writing a custom protocol consumer (not using the JS wrapper), all IPC messages must include `"version": "1"`.
 3. If your view relied on `csp: "off"` default behavior, add `csp: "off"` explicitly to your mount config.
 4. Update heartbeat-timeout assumptions if you relied on the 75s default.
-5. The token delivery change is transparent for JS wrapper consumers. Raw-protocol consumers should expect the fragment-bootstrap flow.
+5. The token delivery change is transparent for JS wrapper consumers. Raw-protocol consumers should expect the fragment-bootstrap flow — see the [auth token section of `docs/ipc-protocol.md`](docs/ipc-protocol.md) for details.
 
 ---
 
