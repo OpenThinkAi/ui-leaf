@@ -58,7 +58,17 @@ export interface View {
 
   /**
    * Swap the view source. Sends {type:"view"}, resolves on the next
-   * view-swapped event, rejects if the compile fails (AC #4).
+   * view-swapped event, rejects if the compile fails. Takes raw TSX —
+   * NOT the `view` name from MountOptions (which is a viewsRoot-relative
+   * path/name). Prefer the alias `setSource(source)` for clarity.
+   */
+  setSource(source: string): Promise<void>;
+
+  /**
+   * @deprecated Use `setSource(source)` instead. Both methods are
+   * identical; `setView` is retained as a non-breaking alias because the
+   * `view` vocabulary is overloaded — `MountOptions.view` is a name/path,
+   * but the argument here is raw TSX.
    */
   setView(source: string): Promise<void>;
 
@@ -282,10 +292,14 @@ export async function mount(options: MountOptions): Promise<View> {
       handle.send({ version: PROTOCOL_VERSION, type: "update", data: opts.data });
     },
 
-    setView(source: string): Promise<void> {
+    setSource(source: string): Promise<void> {
       return enqueueViewOp(() => {
         handle.send({ version: PROTOCOL_VERSION, type: "view", source });
       });
+    },
+
+    setView(source: string): Promise<void> {
+      return this.setSource(source);
     },
 
     patch(opts: { data?: unknown; source?: string }): Promise<void> {

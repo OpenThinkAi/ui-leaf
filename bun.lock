@@ -38,7 +38,7 @@
     },
     "packages/wrapper-js": {
       "name": "@openthink/ui-leaf",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "bin": {
         "ui-leaf": "./bin/ui-leaf",
       },

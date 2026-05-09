@@ -63,6 +63,7 @@ import {
   type InboundConfig,
   type OutboundEvent,
 } from "./ipc.js";
+import { createViewOpQueue } from "./internal/view-op-queue.js";
 
 // Capture the real stdout write BEFORE anything (especially mount() with
 // silent: true) gets a chance to redirect process.stdout. The binary's
@@ -179,6 +180,8 @@ async function runMount(): Promise<void> {
   let mountedView: any = null;
   let stdinClosed = false;
 
+  const enqueueViewOp = createViewOpQueue();
+
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -256,7 +259,7 @@ async function runMount(): Promise<void> {
     }
 
     if (msg.type === "view") {
-      void (async () => {
+      enqueueViewOp(async () => {
         const errors = await mountedView.swapView(msg.source);
         if (errors.length > 0) {
           emit({
@@ -267,12 +270,12 @@ async function runMount(): Promise<void> {
         } else {
           emit({ type: "view-swapped" });
         }
-      })();
+      });
       return;
     }
 
     if (msg.type === "patch") {
-      void (async () => {
+      enqueueViewOp(async () => {
         const errors = await mountedView.patch(msg.data, msg.view.source);
         if (errors.length > 0) {
           emit({
@@ -283,7 +286,7 @@ async function runMount(): Promise<void> {
         } else {
           emit({ type: "view-swapped" });
         }
-      })();
+      });
       return;
     }
 

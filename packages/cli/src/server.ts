@@ -75,7 +75,7 @@ const STRICT_CSP = [
   "form-action 'self'",
   "img-src 'self' data: https:",
   "font-src 'self' https: data:",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https:",
   "script-src 'self' 'unsafe-inline'",
 ].join("; ");
 

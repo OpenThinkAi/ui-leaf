@@ -251,3 +251,32 @@ describe("mutation responses still work after adding new handlers", () => {
     30_000,
   );
 });
+
+describe("strict CSP preset", () => {
+  test(
+    "style-src includes 'https:' to permit external stylesheet links (Google Fonts CSS, etc.)",
+    async () => {
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        csp: "strict",
+      });
+
+      const res = await fetch(server.url + "/");
+      const csp = res.headers.get("Content-Security-Policy");
+      expect(csp).not.toBeNull();
+      // Must have https: alongside the inline-style allowance — without it,
+      // external <link rel="stylesheet"> requests are blocked even though
+      // font-src and img-src already permit https:. The asymmetry was
+      // unintentional (see ui-leaf#36).
+      expect(csp).toContain("style-src 'self' 'unsafe-inline' https:");
+    },
+    30_000,
+  );
+});
