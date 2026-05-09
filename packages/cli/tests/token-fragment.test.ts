@@ -174,6 +174,137 @@ describe("bootstrap script in HTML", () => {
     },
     30_000,
   );
+
+  test(
+    "bootstrap script persists token to sessionStorage and falls back on reload",
+    async () => {
+      const result = await compileView({
+        entry: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+      });
+      expect(result.errors).toHaveLength(0);
+      // The on-hash branch writes to sessionStorage under the documented key.
+      expect(result.html).toContain("__ui_leaf_token__");
+      expect(result.html).toContain("sessionStorage.setItem");
+      // The no-hash branch reads from sessionStorage before deciding sessionEnded.
+      expect(result.html).toContain("sessionStorage.getItem");
+    },
+    30_000,
+  );
+});
+
+// ── Behavioral check: the bootstrap actually does what the comments claim ────
+//
+// We extract the inline bootstrap script from the compiled HTML and run it in
+// a sandbox with stub `window`, `history`, and `sessionStorage` objects. This
+// catches regressions that string-match tests can't (e.g. read/write order,
+// branch wiring) without spinning up a real browser.
+
+describe("bootstrap script behavior (sandboxed)", () => {
+  type Stub = {
+    window: { __UI_LEAF__: { token?: string; sessionEnded?: boolean }; location: { hash: string; pathname: string; search: string } };
+    history: { replaceState: (s: unknown, t: string, url: string) => void };
+    sessionStorage: { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void };
+    replaceStateCalls: Array<{ url: string }>;
+    storage: Map<string, string>;
+  };
+
+  function makeStub(opts: { hash: string; storedToken?: string; storageThrows?: boolean }): Stub {
+    const storage = new Map<string, string>();
+    if (opts.storedToken) storage.set("__ui_leaf_token__", opts.storedToken);
+    const replaceStateCalls: Array<{ url: string }> = [];
+    return {
+      window: {
+        __UI_LEAF__: {},
+        location: { hash: opts.hash, pathname: "/", search: "" },
+      },
+      history: {
+        replaceState: (_s, _t, url) => { replaceStateCalls.push({ url }); },
+      },
+      sessionStorage: {
+        getItem: (k) => {
+          if (opts.storageThrows) throw new Error("storage disabled");
+          return storage.get(k) ?? null;
+        },
+        setItem: (k, v) => {
+          if (opts.storageThrows) throw new Error("storage disabled");
+          storage.set(k, v);
+        },
+      },
+      replaceStateCalls,
+      storage,
+    };
+  }
+
+  // Pull just the IIFE the bootstrap injects (the part after `dataInit`).
+  // We match the explicit `(function(){…})();` block — the only IIFE the
+  // bootstrap emits — so changes upstream of it don't break this regex.
+  function extractBootstrapIife(html: string): string {
+    const m = html.match(/\(function\(\)\{var KEY[\s\S]*?\}\)\(\);/);
+    if (!m) throw new Error("could not find bootstrap IIFE in compiled HTML");
+    return m[0];
+  }
+
+  async function runBootstrap(stub: Stub): Promise<void> {
+    const result = await compileView({
+      entry: "trivial",
+      viewsRoot: VIEWS_ROOT,
+      data: {},
+    });
+    expect(result.errors).toHaveLength(0);
+    const iife = extractBootstrapIife(result.html);
+    // Build a Function whose globals are the stubs. The bootstrap reads
+    // `window`, `history`, `sessionStorage` directly — feed each as a named
+    // arg so the inner code resolves them via the function's lexical scope.
+    const fn = new Function("window", "history", "sessionStorage", iife);
+    fn(stub.window, stub.history, stub.sessionStorage);
+  }
+
+  test("first load with hash token: stores in sessionStorage, clears fragment, no sessionEnded", async () => {
+    const stub = makeStub({ hash: "#token=abc123" });
+    await runBootstrap(stub);
+    expect(stub.window.__UI_LEAF__.token).toBe("abc123");
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBeUndefined();
+    expect(stub.storage.get("__ui_leaf_token__")).toBe("abc123");
+    expect(stub.replaceStateCalls).toHaveLength(1);
+  }, 30_000);
+
+  test("refresh: no hash, sessionStorage has token → mount proceeds with stored token", async () => {
+    const stub = makeStub({ hash: "", storedToken: "previously-stored" });
+    await runBootstrap(stub);
+    expect(stub.window.__UI_LEAF__.token).toBe("previously-stored");
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBeUndefined();
+    expect(stub.replaceStateCalls).toHaveLength(0);
+  }, 30_000);
+
+  test("cold load: no hash, no sessionStorage entry → sessionEnded", async () => {
+    const stub = makeStub({ hash: "" });
+    await runBootstrap(stub);
+    expect(stub.window.__UI_LEAF__.token).toBeUndefined();
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBe(true);
+  }, 30_000);
+
+  test("malformed URL-encoded token in hash → sessionEnded (graceful)", async () => {
+    const stub = makeStub({ hash: "#token=%E0%A4%A" });
+    await runBootstrap(stub);
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBe(true);
+  }, 30_000);
+
+  test("private browsing (sessionStorage throws) on first load with hash token: still mounts", async () => {
+    const stub = makeStub({ hash: "#token=xyz", storageThrows: true });
+    await runBootstrap(stub);
+    // The setItem failure must NOT abort the mount — token from hash is enough.
+    expect(stub.window.__UI_LEAF__.token).toBe("xyz");
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBeUndefined();
+    expect(stub.replaceStateCalls).toHaveLength(1);
+  }, 30_000);
+
+  test("private browsing (sessionStorage throws) on reload with no hash: sessionEnded", async () => {
+    const stub = makeStub({ hash: "", storageThrows: true });
+    await runBootstrap(stub);
+    expect(stub.window.__UI_LEAF__.sessionEnded).toBe(true);
+  }, 30_000);
 });
 
 // ── AC#5 / AC#6 — fetch paths include X-UI-Leaf-Token; server enforces it ───
