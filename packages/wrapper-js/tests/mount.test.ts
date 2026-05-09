@@ -213,6 +213,34 @@ describe("setView()", () => {
     ]);
     await view.close();
   });
+
+  test("setSource() is the canonical alias and sends the same {type:view} wire message", async () => {
+    const view = await mountMock([
+      { kind: "emit", msg: { version: "1", type: "ready", url: "u", port: 1 } },
+      { kind: "wait-for", type: "view", timeoutMs: 5000 },
+      { kind: "emit", msg: { version: "1", type: "view-swapped" } },
+      { kind: "wait-for", type: "close", timeoutMs: 5000 },
+      { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
+      { kind: "exit", code: 0 },
+    ]);
+    await view.setSource("<div>via setSource</div>");
+    await view.close();
+  });
+
+  test("setView and setSource are the same function reference — destructuring works", async () => {
+    const view = await mountMock([
+      { kind: "emit", msg: { version: "1", type: "ready", url: "u", port: 1 } },
+      { kind: "wait-for", type: "view", timeoutMs: 5000 },
+      { kind: "emit", msg: { version: "1", type: "view-swapped" } },
+      { kind: "wait-for", type: "close", timeoutMs: 5000 },
+      { kind: "emit", msg: { version: "1", type: "closed", reason: "caller" } },
+      { kind: "exit", code: 0 },
+    ]);
+    expect(view.setView).toBe(view.setSource);
+    const { setView } = view;
+    await setView("<div>destructured call</div>");
+    await view.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

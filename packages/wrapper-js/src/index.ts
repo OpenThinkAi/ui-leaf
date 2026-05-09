@@ -58,7 +58,18 @@ export interface View {
 
   /**
    * Swap the view source. Sends {type:"view"}, resolves on the next
-   * view-swapped event, rejects if the compile fails (AC #4).
+   * view-swapped event, rejects if the compile fails. Takes raw TSX —
+   * NOT the `view` name from MountOptions (which is a viewsRoot-relative
+   * path/name).
+   */
+  setSource(source: string): Promise<void>;
+
+  /**
+   * Alias for `setSource(source)` — identical behaviour. Retained as a
+   * non-breaking alias because `setView` was the original v1.0.x name;
+   * `setSource` is the canonical name going forward (the `view`
+   * vocabulary is overloaded — `MountOptions.view` is a viewsRoot
+   * name/path, but the argument here is raw TSX).
    */
   setView(source: string): Promise<void>;
 
@@ -273,6 +284,11 @@ export async function mount(options: MountOptions): Promise<View> {
 
   // ---- Build and return the View handle ------------------------------------
 
+  const setSourceImpl = (source: string): Promise<void> =>
+    enqueueViewOp(() => {
+      handle.send({ version: PROTOCOL_VERSION, type: "view", source });
+    });
+
   const view: View = {
     url: readyInfo.url,
     id: readyInfo.id,
@@ -282,11 +298,11 @@ export async function mount(options: MountOptions): Promise<View> {
       handle.send({ version: PROTOCOL_VERSION, type: "update", data: opts.data });
     },
 
-    setView(source: string): Promise<void> {
-      return enqueueViewOp(() => {
-        handle.send({ version: PROTOCOL_VERSION, type: "view", source });
-      });
-    },
+    setSource: setSourceImpl,
+    // setView is a non-breaking alias of setSource. Defined as the same
+    // function reference (not `this.setSource(...)`) so destructured
+    // usage like `const { setView } = view` keeps working.
+    setView: setSourceImpl,
 
     patch(opts: { data?: unknown; source?: string }): Promise<void> {
       const hasData = opts.data !== undefined;
