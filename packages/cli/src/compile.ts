@@ -283,16 +283,25 @@ function assembleHtml(opts: {
     ? "window.__UI_LEAF__ = {};"
     : `window.__UI_LEAF__ = { data: JSON.parse(${escapeForScriptTag(JSON.stringify(JSON.stringify(data ?? null)))}) };`;
 
-  // Bootstrap: reads token from URL fragment, stashes it on __UI_LEAF__.token,
-  // then immediately clears the fragment from the URL bar so the token is
-  // never visible in history. On reload (fragment gone), sets sessionEnded so
-  // the bundled module can render a friendly recovery message instead of
-  // attempting unauthenticated fetches.
-  // decodeURIComponent is wrapped in try/catch: a malformed %-sequence would
-  // otherwise throw and kill the bootstrap silently; the catch falls through
-  // to sessionEnded so the user gets the recovery screen instead of a blank page.
+  // Bootstrap: on first load, reads the token from the URL fragment, stashes it
+  // on __UI_LEAF__.token AND in sessionStorage under __ui_leaf_token__, then
+  // immediately clears the fragment from the URL bar so the token is never
+  // visible in history. On subsequent loads (refresh, restored tab) the
+  // fragment is gone but sessionStorage still has the token, so the page
+  // re-attaches to the live mount instead of showing the session-ended screen.
+  // sessionStorage is per-tab and dies when the tab closes, which preserves
+  // the existing "tab close → heartbeat-timeout shutdown" semantic; localStorage
+  // would survive across tab lifetimes and risk leaking tokens into later
+  // mounts on the same port. Only when both the fragment AND sessionStorage
+  // are empty is sessionEnded set.
+  // The two failure modes both fall through to sessionEnded:
+  //   - decodeURIComponent throws on a malformed %-sequence in the fragment.
+  //   - sessionStorage access throws under "private browsing" / disabled storage.
+  // sessionStorage.setItem is in its own try/catch so a private-browsing read
+  // failure does not abort the first-load mount when the URL hash is valid;
+  // refresh recovery is simply unavailable in that mode.
   const bootstrapScript = `${dataInit}
-(function(){var m=/[#&]token=([^&#]*)/.exec(window.location.hash);if(m){try{window.__UI_LEAF__.token=decodeURIComponent(m[1]);history.replaceState(null,"",window.location.pathname+window.location.search);}catch(e){window.__UI_LEAF__.sessionEnded=true;}}else{window.__UI_LEAF__.sessionEnded=true;}})();`;
+(function(){var KEY="__ui_leaf_token__";var m=/[#&]token=([^&#]*)/.exec(window.location.hash);if(m){try{var t=decodeURIComponent(m[1]);window.__UI_LEAF__.token=t;try{sessionStorage.setItem(KEY,t);}catch(e){}history.replaceState(null,"",window.location.pathname+window.location.search);}catch(e){window.__UI_LEAF__.sessionEnded=true;}}else{var stored=null;try{stored=sessionStorage.getItem(KEY);}catch(e){}if(stored){window.__UI_LEAF__.token=stored;}else{window.__UI_LEAF__.sessionEnded=true;}}})();`;
 
   return `<!doctype html>
 <html lang="en">
