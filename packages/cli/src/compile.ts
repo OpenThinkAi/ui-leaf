@@ -288,9 +288,9 @@ function assembleHtml(opts: {
   // localStorage) is deliberate — its per-tab scope preserves the
   // "tab close → heartbeat-timeout shutdown" semantic; localStorage would leak
   // tokens into later mounts on the same port. The key is namespaced by
-  // window.location.port so simultaneous mounts on different ports don't share
-  // the slot, and stale entries from prior mounts on the same port get
-  // overwritten on the next first-load.
+  // window.location.port — sessionStorage is already partitioned per-origin
+  // (so different ports get separate stores anyway), so this is defense-in-depth
+  // against same-port reuse and makes entries self-describing in DevTools.
   //
   // Two failure paths fall through to sessionEnded: malformed %-sequence in
   // the fragment (decodeURIComponent throws), or sessionStorage disabled
