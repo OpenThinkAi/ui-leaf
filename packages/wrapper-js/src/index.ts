@@ -65,10 +65,11 @@ export interface View {
   setSource(source: string): Promise<void>;
 
   /**
-   * @deprecated Use `setSource(source)` instead. Both methods are
-   * identical; `setView` is retained as a non-breaking alias because the
-   * `view` vocabulary is overloaded — `MountOptions.view` is a name/path,
-   * but the argument here is raw TSX.
+   * Alias for `setSource(source)` — identical behaviour. Retained as a
+   * non-breaking alias because `setView` was the original v1.0.x name;
+   * `setSource` is the canonical name going forward (the `view`
+   * vocabulary is overloaded — `MountOptions.view` is a viewsRoot
+   * name/path, but the argument here is raw TSX).
    */
   setView(source: string): Promise<void>;
 

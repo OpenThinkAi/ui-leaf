@@ -124,9 +124,12 @@ export interface MountOptions {
    *   the broker principle: `connect-src 'self'` prevents views from
    *   fetching external APIs (all data flows through `data` and
    *   `mutations`); `form-action 'self'` closes the form-submit
-   *   exfiltration vector. HTTPS images/fonts and inline styles for
-   *   React are permitted. View files can only *add* further restrictions
-   *   via meta tag, never remove them.
+   *   exfiltration vector. Permitted: inline styles for React, plus any
+   *   HTTPS origin for `style-src` / `font-src` / `img-src` (so external
+   *   stylesheets like Google Fonts CSS load without configuration). If
+   *   you need to lock external stylesheet/font/image origins to a
+   *   specific allowlist, pass a raw CSP string instead. View files can
+   *   only *add* further restrictions via meta tag, never remove them.
    *
    * - `"off"` — no CSP header sent. Views can fetch arbitrary URLs and
    *   submit forms to any origin. The data/mutations contract is
