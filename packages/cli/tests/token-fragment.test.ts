@@ -192,6 +192,22 @@ describe("bootstrap script in HTML", () => {
     },
     30_000,
   );
+
+  test(
+    "bootstrap script namespaces the storage key by window.location.port",
+    async () => {
+      const result = await compileView({
+        entry: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+      });
+      expect(result.errors).toHaveLength(0);
+      // The KEY is composed at runtime from the prefix + port so simultaneous
+      // mounts on different ports don't share a sessionStorage slot.
+      expect(result.html).toContain('"__ui_leaf_token__:"+window.location.port');
+    },
+    30_000,
+  );
 });
 
 // ── Behavioral check: the bootstrap actually does what the comments claim ────
@@ -202,8 +218,13 @@ describe("bootstrap script in HTML", () => {
 // branch wiring) without spinning up a real browser.
 
 describe("bootstrap script behavior (sandboxed)", () => {
+  // The KEY in the bootstrap is composed as `__ui_leaf_token__:` + port; the
+  // sandboxed runs use this fixed port so the resolved key is deterministic.
+  const STUB_PORT = "5810";
+  const STORAGE_KEY = `__ui_leaf_token__:${STUB_PORT}`;
+
   type Stub = {
-    window: { __UI_LEAF__: { token?: string; sessionEnded?: boolean }; location: { hash: string; pathname: string; search: string } };
+    window: { __UI_LEAF__: { token?: string; sessionEnded?: boolean }; location: { hash: string; pathname: string; search: string; port: string } };
     history: { replaceState: (s: unknown, t: string, url: string) => void };
     sessionStorage: { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void };
     replaceStateCalls: Array<{ url: string }>;
@@ -212,12 +233,12 @@ describe("bootstrap script behavior (sandboxed)", () => {
 
   function makeStub(opts: { hash: string; storedToken?: string; storageThrows?: boolean }): Stub {
     const storage = new Map<string, string>();
-    if (opts.storedToken) storage.set("__ui_leaf_token__", opts.storedToken);
+    if (opts.storedToken) storage.set(STORAGE_KEY, opts.storedToken);
     const replaceStateCalls: Array<{ url: string }> = [];
     return {
       window: {
         __UI_LEAF__: {},
-        location: { hash: opts.hash, pathname: "/", search: "" },
+        location: { hash: opts.hash, pathname: "/", search: "", port: STUB_PORT },
       },
       history: {
         replaceState: (_s, _t, url) => { replaceStateCalls.push({ url }); },
@@ -237,13 +258,22 @@ describe("bootstrap script behavior (sandboxed)", () => {
     };
   }
 
-  // Pull just the IIFE the bootstrap injects (the part after `dataInit`).
-  // We match the explicit `(function(){…})();` block — the only IIFE the
-  // bootstrap emits — so changes upstream of it don't break this regex.
+  // Pull the bootstrap IIFE out of the compiled HTML by anchoring on the
+  // structural markers around it — the `<!-- ui-leaf bootstrap -->` comment
+  // and the `<script>` tag emitted by assembleHtml() in compile.ts. We then
+  // peel off the trailing `(function(){…})();` block. This is intentionally
+  // independent of identifiers inside the IIFE (e.g. `var KEY`), so cosmetic
+  // changes or minification don't masquerade as behavior regressions.
   function extractBootstrapIife(html: string): string {
-    const m = html.match(/\(function\(\)\{var KEY[\s\S]*?\}\)\(\);/);
-    if (!m) throw new Error("could not find bootstrap IIFE in compiled HTML");
-    return m[0];
+    const scriptMatch = html.match(/<!-- ui-leaf bootstrap -->\s*<script>([\s\S]*?)<\/script>/);
+    if (!scriptMatch) {
+      throw new Error("could not find bootstrap script tag in compiled HTML; check assembleHtml() in packages/cli/src/compile.ts");
+    }
+    const iifeMatch = scriptMatch[1]!.match(/\(function\(\)\{[\s\S]*?\}\)\(\);\s*$/);
+    if (!iifeMatch) {
+      throw new Error("could not find bootstrap IIFE in compiled HTML; check assembleHtml() in packages/cli/src/compile.ts");
+    }
+    return iifeMatch[0];
   }
 
   async function runBootstrap(stub: Stub): Promise<void> {
@@ -266,7 +296,7 @@ describe("bootstrap script behavior (sandboxed)", () => {
     await runBootstrap(stub);
     expect(stub.window.__UI_LEAF__.token).toBe("abc123");
     expect(stub.window.__UI_LEAF__.sessionEnded).toBeUndefined();
-    expect(stub.storage.get("__ui_leaf_token__")).toBe("abc123");
+    expect(stub.storage.get(STORAGE_KEY)).toBe("abc123");
     expect(stub.replaceStateCalls).toHaveLength(1);
   }, 30_000);
 
