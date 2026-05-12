@@ -104,20 +104,28 @@ function addNamedExports(bundledEsm: string, id: string): string {
       names.push(k[1]!);
     }
   } else {
-    // Assignment shape — scan the whole bundle for `exports.NAME =`. The
-    // only `exports` object in our bundle is React's own (Bun's commonJS
-    // shim isolates each wrapped module), so collisions with names from
-    // other modules aren't a concern. Dedup via Set in case a name is
-    // reassigned (`exports.foo = ...; exports.foo = ...`).
+    // Assignment shape. On Windows the `exportsVarName` captured above is
+    // an inner `require_X_production` function name (because the outer
+    // wrapper does `module.exports = require_X_production()` rather than
+    // `module.exports = exports_X`). Scope the `exports.NAME =` scan to
+    // *that* inner `__commonJS` callback body so a multi-module bundle
+    // (e.g. react-dom + scheduler) doesn't bleed unrelated `exports.NAME`
+    // assignments into the harvested list. If we can't find the inner
+    // body for any reason, fall back to a whole-bundle scan — extra
+    // harmless `undefined` re-exports beats throwing on the contained
+    // failure mode.
+    const innerBodyRe = new RegExp(
+      `var ${exportsVarName}=__commonJS\\(\\([^)]*\\)=>\\{([\\s\\S]*?)\\}\\);`,
+    );
+    const innerBodyMatch = bundledEsm.match(innerBodyRe);
+    const scanRegion = innerBodyMatch?.[1] ?? bundledEsm;
     const seen = new Set<string>();
     const assignRe = /\bexports\.([A-Za-z_$][\w$]*)\s*=/g;
     let m;
-    while ((m = assignRe.exec(bundledEsm)) !== null) {
-      if (!seen.has(m[1]!)) {
-        seen.add(m[1]!);
-        names.push(m[1]!);
-      }
+    while ((m = assignRe.exec(scanRegion)) !== null) {
+      seen.add(m[1]!);
     }
+    for (const n of seen) names.push(n);
   }
   if (names.length === 0) {
     throw new Error(
