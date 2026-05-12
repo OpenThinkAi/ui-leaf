@@ -82,7 +82,8 @@ describe("openInAppMode contains post-spawn ChildProcess errors (ui-leaf#54)", (
         silent: true,
       });
 
-      // Allow the queued microtask (the fake child's 'error' emit) to fire.
+      // Yield to the event loop's check phase so the fake child's
+      // setImmediate-scheduled 'error' emit fires before we assert.
       await new Promise((r) => setImmediate(r));
 
       // openInAppMode must have constructed the child, attached an 'error'
