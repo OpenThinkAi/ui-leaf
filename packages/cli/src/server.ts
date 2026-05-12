@@ -1,4 +1,9 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import open, { apps } from "open";
 import { compileView, compileSource } from "./compile.js";
 import type { CloseReason } from "./ipc.js";
@@ -43,56 +48,157 @@ export type CspOption = "off" | "strict" | (string & {});
 
 export type Shell = "tab" | "app";
 
+// macOS Chromium-family bundle binary paths. Spawning these directly
+// bypasses `/usr/bin/open` so launch args reach Chrome even when an instance
+// of that browser is already running with the user's default profile —
+// see openInAppMode docstring for the AppleEvent-handoff failure mode.
+const MACOS_CHROMIUM_BINARIES = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+];
+
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function attachLauncherErrorListener(
+  child: ChildProcess | null | undefined,
+  label: string,
+): void {
+  child?.on?.("error", (err: unknown) => {
+    // Silenced to prevent uncaughtException (see openInAppMode docstring),
+    // but emit a stderr breadcrumb when UI_LEAF_DEBUG=1 is set so the next
+    // Chromium quirk leaves a trace. Gated on env (not on the `silent`
+    // option) because structured-protocol mode intentionally suppresses
+    // incidental output; debug-tracing is orthogonal opt-in.
+    if (process.env.UI_LEAF_DEBUG === "1") {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `ui-leaf: chromium app-mode launch failed post-spawn (${label}): ${msg}\n`,
+      );
+    }
+  });
+}
+
 /**
  * Try to open `url` in a Chromium browser's --app mode (chromeless window:
  * no URL bar, no tabs). Returns true if a Chromium browser was found and
  * launched, false if no Chromium variant is installed (caller should fall
  * back to the default-browser tab).
  *
- * The `open` library resolves with a ChildProcess once spawn succeeds.
- * Post-spawn failures (Chromium refusing the `--app=URL` handoff, the
- * helper binary exiting non-zero after delivering an Apple Event, etc.)
- * are emitted as `'error'` events on that child. Node converts an
- * unhandled `'error'` into `uncaughtException` and crashes the host
- * process — which manifested as the mount binary dying when a stray
- * unauthenticated request hit the server in `shell:"app"` mode (timing
- * made it look like the request caused the exit, but the real trigger
- * was the launcher's delayed failure being raised inside the same event
- * loop tick as the stray request). Defensively swallow post-spawn errors
- * and `unref()` the child so its exit can't keep the event loop alive.
+ * **macOS direct-spawn path** (ui-leaf#55): on macOS the `open` library
+ * shells out to `/usr/bin/open -a "Google Chrome" --args …`. When Chrome
+ * is already running with the user's default profile, that delivers an
+ * AppleEvent to the existing instance which silently drops the `--args`
+ * (only fresh-launch `main()` receives them), so `--app=URL` is ignored
+ * and the URL opens in a normal tab — no chromeless window appears. The
+ * fix is to spawn the bundle binary directly via `child_process.spawn`,
+ * bypassing `/usr/bin/open` entirely, plus pass `--user-data-dir=<tmp>`
+ * to a fresh per-mount temp profile so Chrome opens a separate process
+ * (single-instance lock is per-profile) and `--app=` actually takes
+ * effect.
  *
- * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb
- * each time the silenced `'error'` fires. Useful when a future Chromium
- * release changes `--app=URL` semantics and the silent containment hides
- * a genuine breakage; off by default so the structured-protocol mode
- * (`silent: true`) and consumer terminals stay clean.
+ * **Linux/Windows path**: defer to the `open` library, which spawns the
+ * browser binary directly on those platforms (not through a LaunchServices
+ * shim), so launch args reach the new Chrome process on cold launch.
+ * `--user-data-dir=<tmp>` is still useful here for isolation and to dodge
+ * any single-instance behaviour.
+ *
+ * **Crash containment** (ui-leaf#54): the spawned ChildProcess can emit a
+ * delayed `'error'` event post-spawn (Chromium rejecting the launch flags,
+ * helper binary exiting non-zero after delivering its message). Node
+ * promotes unhandled `'error'` to `uncaughtException` and kills the host;
+ * we attach a no-op listener and `unref()` the child so launcher failures
+ * stay contained.
+ *
+ * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb each
+ * time the silenced `'error'` fires.
+ *
+ * **Profile leak**: a successful launch leaves a fresh user-data-dir under
+ * `os.tmpdir()` (macOS `/var/folders/.../T`, Linux `/tmp`, Windows
+ * `%TEMP%`) and intentionally does not clean it up — Chrome is unref'd
+ * and the host has no reliable signal for "Chrome closed this profile,"
+ * and deleting the dir while Chrome is still using it would corrupt the
+ * live window. The OS reaps tmpdir periodically (macOS does this every
+ * ~3 days; Linux on reboot or via systemd-tmpfiles); the profile state
+ * is small (single window, no extensions) so accumulation is bounded.
+ * When the function returns false (no Chromium found), the just-created
+ * dir is removed before returning so a caller-side fallback to a
+ * default-browser tab doesn't leak an empty profile.
  */
 async function openInAppMode(url: string): Promise<boolean> {
-  // Order: most-common Chromium variants first.
+  // Defensive: openUrl is server-constructed today (http://127.0.0.1:port/
+  // #token=...), but a future refactor could change that. Reject anything
+  // that isn't an http(s) URL so a stray `data:` or `javascript:` can't
+  // be smuggled into a chromeless window (no URL bar to warn the user).
+  if (!/^https?:\/\//i.test(url)) return false;
+
+  // Each mount gets its own --user-data-dir so Chrome opens a separate
+  // process and the chromeless window stays isolated from the user's
+  // primary session. See docstring for the full rationale.
+  const userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
+  const launchArgs = [
+    `--app=${url}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+  ];
+
+  // Helper: remove the user-data-dir when we fall through without launching.
+  const cleanupProfile = async (): Promise<void> => {
+    try {
+      await rm(userDataDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; the OS reaper handles anything we miss.
+    }
+  };
+
+  if (process.platform === "darwin") {
+    for (const binPath of MACOS_CHROMIUM_BINARIES) {
+      if (!(await isExecutable(binPath))) continue;
+      try {
+        const child = spawn(binPath, launchArgs, {
+          detached: true,
+          stdio: "ignore",
+        });
+        attachLauncherErrorListener(child, binPath);
+        child.unref();
+        return true;
+      } catch {
+        // Spawn can throw synchronously on EPERM, ENOENT-after-access-race, etc.
+        // Try the next candidate.
+      }
+    }
+    await cleanupProfile();
+    return false;
+  }
+
+  // Linux / Windows: defer to the `open` library, which spawns the browser
+  // binary directly (no LaunchServices shim) so launch args are honored.
   const candidates = [apps.chrome, apps.edge, apps.brave];
   for (const app of candidates) {
     try {
-      const child = await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
-      child?.on?.("error", (err) => {
-        // Silenced to prevent uncaughtException (see docstring), but emit a
-        // stderr breadcrumb when UI_LEAF_DEBUG=1 is set so the next Chromium
-        // quirk leaves a trace. Gated on env (not on the `silent` option)
-        // because structured-protocol mode intentionally suppresses
-        // incidental output; debug-tracing is orthogonal opt-in. The
-        // `=== "1"` check matches the prevailing UI_LEAF_* env-flag style
-        // (UI_LEAF_SMOKE, UI_LEAF_SKIP_DOWNLOAD) so `UI_LEAF_DEBUG=0` and
-        // `UI_LEAF_DEBUG=false` correctly read as "off".
-        if (process.env.UI_LEAF_DEBUG === "1") {
-          const msg = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`ui-leaf: chromium app-mode launch failed post-spawn (${app}): ${msg}\n`);
-        }
-      });
+      const child = (await open(url, { app: { name: app, arguments: launchArgs } })) as
+        | ChildProcess
+        | undefined;
+      // `apps.<name>` is typed as `string | readonly string[]` (some entries
+      // carry fallback binary paths); flatten to a single string for the
+      // diagnostic label.
+      const label = Array.isArray(app) ? app.join(",") : (app as string);
+      attachLauncherErrorListener(child, label);
       child?.unref?.();
       return true;
     } catch {
       // Try next candidate; `open` throws if the binary isn't installed.
     }
   }
+  await cleanupProfile();
   return false;
 }
 
