@@ -104,25 +104,31 @@ function addNamedExports(bundledEsm: string, id: string): string {
       names.push(k[1]!);
     }
   } else {
-    // Assignment shape. On Windows the `exportsVarName` captured above is
-    // an inner `require_X_production` function name (because the outer
-    // wrapper does `module.exports = require_X_production()` rather than
-    // `module.exports = exports_X`). Scope the `exports.NAME =` scan to
-    // *that* inner `__commonJS` callback body so a multi-module bundle
-    // (e.g. react-dom + scheduler) doesn't bleed unrelated `exports.NAME`
-    // assignments into the harvested list. If we can't find the inner
-    // body for any reason, fall back to a whole-bundle scan — extra
-    // harmless `undefined` re-exports beats throwing on the contained
-    // failure mode.
-    const innerBodyRe = new RegExp(
-      `var ${exportsVarName}=__commonJS\\(\\([^)]*\\)=>\\{([\\s\\S]*?)\\}\\);`,
-    );
-    const innerBodyMatch = bundledEsm.match(innerBodyRe);
-    const scanRegion = innerBodyMatch?.[1] ?? bundledEsm;
+    // Assignment shape — scan the whole bundle for `exports.NAME =`.
+    //
+    // An earlier revision tried to scope this scan to the inner
+    // `var require_X_production=__commonJS((exports,module)=>{...});`
+    // callback body via a non-greedy regex. That doesn't work: React's
+    // compiled source is full of `something(function(){...});` patterns
+    // ending in `});`, so the lazy `[\s\S]*?` stops at the first inner
+    // `});` and captures a partial prefix with no `exports.NAME =`
+    // assignments — names come out empty and the harvest fails.
+    //
+    // A whole-bundle scan trades that fragility for some potential
+    // over-collection (e.g. if `react-dom`'s bundle ever wraps two
+    // distinct CJS modules under the same `exports` local — scheduler
+    // is currently inlined, but Bun chooses the lowering). The downstream
+    // `var { NAME: _ne_NAME, ... } = require_X()` destructure binds
+    // missing properties to `undefined`, and the matching named export
+    // then re-exports an undefined-valued binding. Consumers that don't
+    // import the extra name are unaffected; consumers that do see
+    // `undefined` either way. The throw at `names.length === 0` below
+    // and the bundle-tail diagnostic in `failMsg` catch any future
+    // divergence regardless.
     const seen = new Set<string>();
     const assignRe = /\bexports\.([A-Za-z_$][\w$]*)\s*=/g;
     let m;
-    while ((m = assignRe.exec(scanRegion)) !== null) {
+    while ((m = assignRe.exec(bundledEsm)) !== null) {
       seen.add(m[1]!);
     }
     for (const n of seen) names.push(n);
