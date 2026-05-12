@@ -49,35 +49,59 @@ const ENTRIES: readonly Entry[] = [
  *
  * The identifiers in Bun's generated shim are stable when `minify.identifiers`
  * is false: __commonJS, __export, exports_<pkg>_production, require_<entry>.
+ *
+ * Each regex assumption is load-bearing — a silent fallthrough produces a
+ * bundle with only `export default require_X()` and no named exports, which
+ * then breaks view compilation at runtime ("No matching export ... for
+ * import 'createElement'"). To avoid that, every match-failure throws with
+ * the entry id, the regex that failed, and a tail of the bundled source so
+ * the divergence is visible in CI logs (see issue #49 for the Windows
+ * occurrence that motivated this).
  */
-function addNamedExports(bundledEsm: string): string {
+function addNamedExports(bundledEsm: string, id: string): string {
+  const tail = (n = 500) => bundledEsm.slice(-n);
+  const fail = (which: string, extra = ""): never => {
+    throw new Error(
+      `addNamedExports[${id}]: ${which} regex did not match.${extra ? " " + extra : ""}\n--- bundle tail (last 500 bytes) ---\n${tail()}\n--- end tail ---`,
+    );
+  };
+
   // Find `export default require_X()` at the end of the bundle.
   const defaultMatch = bundledEsm.match(/export default (\w+)\(\);?\s*$/);
-  if (!defaultMatch?.[1]) return bundledEsm;
-  const requireFnName = defaultMatch[1];
+  if (!defaultMatch?.[1]) fail("default-export-tail");
+  const requireFnName = defaultMatch![1]!;
 
   // Find which exports_Y variable the wrapper assigns to module.exports.
   const requireFnPattern = new RegExp(
     `var ${requireFnName}=__commonJS[\\s\\S]*?module\\.exports=(\\w+)[\\s\\S]*?\\}\\);`,
   );
   const requireFnMatch = bundledEsm.match(requireFnPattern);
-  if (!requireFnMatch?.[1]) return bundledEsm;
-  const exportsVarName = requireFnMatch[1];
+  if (!requireFnMatch?.[1]) {
+    fail("commonjs-shim", `requireFnName=${requireFnName}`);
+  }
+  const exportsVarName = requireFnMatch![1]!;
 
   // Find __export(exports_Y, { key: ..., key2: ... }) to harvest export names.
   const exportCallPattern = new RegExp(
     `__export\\(${exportsVarName},\\{([^}]+)\\}`,
   );
   const exportCallMatch = bundledEsm.match(exportCallPattern);
-  if (!exportCallMatch?.[1]) return bundledEsm;
+  if (!exportCallMatch?.[1]) {
+    fail("__export-call", `exportsVarName=${exportsVarName}`);
+  }
 
   const names: string[] = [];
   const keyRe = /\b(\w+):/g;
   let k;
-  while ((k = keyRe.exec(exportCallMatch[1]!)) !== null) {
+  while ((k = keyRe.exec(exportCallMatch![1]!)) !== null) {
     names.push(k[1]!);
   }
-  if (names.length === 0) return bundledEsm;
+  if (names.length === 0) {
+    fail(
+      "export-names-empty",
+      `exportsVarName=${exportsVarName}, group=${exportCallMatch![1]!.slice(0, 200)}`,
+    );
+  }
 
   // Replace `export default require_X()` with:
   //   var __cjs_exports = require_X();       — call once, cache
@@ -135,7 +159,18 @@ for (const { id, specifier, external } of ENTRIES) {
   }
 
   const raw = await result.outputs[0]!.text();
-  const content = addNamedExports(raw);
+  const content = addNamedExports(raw, id);
+
+  // Belt-and-suspenders: every entry must end with an `export{...}` named-
+  // exports clause appended by addNamedExports. If a future Bun output shape
+  // sneaks past the regexes (returning an unchanged bundle without throwing),
+  // catch it here before the broken bytes get written.
+  if (!/export\{[^}]+\};?\s*$/.test(content.slice(-2000))) {
+    throw new Error(
+      `addNamedExports[${id}]: post-process produced no named-export clause. ` +
+        `Tail (last 500 bytes):\n${content.slice(-500)}`,
+    );
+  }
 
   // Assert that external packages survive as bare ESM imports (not inlined).
   // If Bun ever inlines despite the external flag, we'd have duplicate React

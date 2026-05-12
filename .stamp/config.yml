@@ -10,7 +10,7 @@ branches:
       - name: build
         run: bun run build
       - name: test
-        run: bun test packages/wrapper-js/tests/
+        run: bun test
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md
