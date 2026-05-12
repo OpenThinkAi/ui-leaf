@@ -67,7 +67,17 @@ async function openInAppMode(url: string): Promise<boolean> {
   for (const app of candidates) {
     try {
       const child = await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
-      child?.on?.("error", () => { /* silenced; see docstring */ });
+      child?.on?.("error", (err) => {
+        // Silenced to prevent uncaughtException (see docstring), but emit a
+        // stderr breadcrumb when UI_LEAF_DEBUG is set so the next Chromium
+        // quirk leaves a trace. Gated on env, not on the `silent` option,
+        // because the structured-protocol mode (silent: true) intentionally
+        // suppresses all incidental output.
+        if (process.env.UI_LEAF_DEBUG) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`ui-leaf: chromium app-mode launch failed post-spawn (${app}): ${msg}\n`);
+        }
+      });
       child?.unref?.();
       return true;
     } catch {
