@@ -327,15 +327,25 @@ describe("kill", () => {
           msg: { version: "1", type: "ready", url: "u", port: 1 },
         },
         // Sit idle until SIGTERM arrives. The mock's SIGTERM handler emits
-        // closed:signal and exits 0.
+        // closed:signal and exits 0 — on POSIX. On Windows there are no
+        // signals; child.kill() invokes the uncatchable TerminateProcess,
+        // so the mock never gets to run its handler.
         { kind: "wait-for", type: "__never__", timeoutMs: 8000 },
       ],
     });
     await handle.ready;
     handle.kill();
     const exit = await handle.exited;
-    expect(exit.code).toBe(0);
-    // The mock emits closed:signal; observedCloseReason wins over killRequested.
-    expect(["signal", "killed"]).toContain(exit.reason);
+    if (process.platform === "win32") {
+      // Windows: no POSIX signals. The mock can't catch SIGTERM, so it's
+      // force-terminated with no closed event and Node reports code=null.
+      // The wrapper falls back to the killRequested → "killed" path.
+      expect(exit.code).toBeNull();
+      expect(exit.reason).toBe("killed");
+    } else {
+      expect(exit.code).toBe(0);
+      // The mock emits closed:signal; observedCloseReason wins over killRequested.
+      expect(["signal", "killed"]).toContain(exit.reason);
+    }
   });
 });
