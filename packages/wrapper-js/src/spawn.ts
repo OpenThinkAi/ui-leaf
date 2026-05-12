@@ -215,15 +215,7 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
     resolveExited({ code: null, reason: "error" });
   });
 
-  // Use 'close' rather than 'exit' so the child's stdout has a chance to
-  // drain its final 'data' chunks before we settle .exited. Node fires
-  // 'exit' as soon as the process ends and 'close' only after all stdio
-  // streams have closed — on Windows in particular, an event the binary
-  // emits immediately before exiting (e.g. an error/phase:build) can
-  // otherwise lose the race with the exit handler, draining the view-op
-  // waiters with the generic "process exited unexpectedly" rejection
-  // instead of the real error message (#57).
-  child.on("close", (code) => {
+  child.on("exit", (code) => {
     terminated = true;
     if (killTimer) {
       clearTimeout(killTimer);
