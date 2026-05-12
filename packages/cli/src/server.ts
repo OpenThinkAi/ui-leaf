@@ -60,6 +60,12 @@ export type Shell = "tab" | "app";
  * was the launcher's delayed failure being raised inside the same event
  * loop tick as the stray request). Defensively swallow post-spawn errors
  * and `unref()` the child so its exit can't keep the event loop alive.
+ *
+ * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb
+ * each time the silenced `'error'` fires. Useful when a future Chromium
+ * release changes `--app=URL` semantics and the silent containment hides
+ * a genuine breakage; off by default so the structured-protocol mode
+ * (`silent: true`) and consumer terminals stay clean.
  */
 async function openInAppMode(url: string): Promise<boolean> {
   // Order: most-common Chromium variants first.
@@ -67,7 +73,20 @@ async function openInAppMode(url: string): Promise<boolean> {
   for (const app of candidates) {
     try {
       const child = await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
-      child?.on?.("error", () => { /* silenced; see docstring */ });
+      child?.on?.("error", (err) => {
+        // Silenced to prevent uncaughtException (see docstring), but emit a
+        // stderr breadcrumb when UI_LEAF_DEBUG=1 is set so the next Chromium
+        // quirk leaves a trace. Gated on env (not on the `silent` option)
+        // because structured-protocol mode intentionally suppresses
+        // incidental output; debug-tracing is orthogonal opt-in. The
+        // `=== "1"` check matches the prevailing UI_LEAF_* env-flag style
+        // (UI_LEAF_SMOKE, UI_LEAF_SKIP_DOWNLOAD) so `UI_LEAF_DEBUG=0` and
+        // `UI_LEAF_DEBUG=false` correctly read as "off".
+        if (process.env.UI_LEAF_DEBUG === "1") {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`ui-leaf: chromium app-mode launch failed post-spawn (${app}): ${msg}\n`);
+        }
+      });
       child?.unref?.();
       return true;
     } catch {

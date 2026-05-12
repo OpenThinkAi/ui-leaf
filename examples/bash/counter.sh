@@ -96,7 +96,10 @@ echo "$CONFIG" >&"${UILEAF[1]}"
 echo "[bash] sent config; waiting for events…" >&2
 
 # Clean up the coproc on SIGTERM so the process tree doesn't linger.
-trap 'kill "$UILEAF_PID" 2>/dev/null; exit 0' SIGTERM SIGINT
+# Bash unsets the coproc PID variable once the coprocess exits, so the
+# default-empty fallback avoids tripping `set -u` if the trap fires after
+# the binary has already terminated.
+trap 'kill "${UILEAF_PID:-}" 2>/dev/null; exit 0' SIGTERM SIGINT
 
 # Read events line by line from the binary's stdout.
 while IFS= read -r line <&"${UILEAF[0]}"; do
@@ -155,5 +158,9 @@ while IFS= read -r line <&"${UILEAF[0]}"; do
   esac
 done
 
-wait "$UILEAF_PID" 2>/dev/null || true
+# By the time we reach this point in smoke mode, the coprocess has emitted
+# `closed` and exited — Bash then unsets UILEAF_PID, which under `set -u`
+# would otherwise crash with "unbound variable". The default-empty form
+# turns the wait into a no-op when the PID is already gone.
+wait "${UILEAF_PID:-}" 2>/dev/null || true
 echo "[bash] done." >&2
