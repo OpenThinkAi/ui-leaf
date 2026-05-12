@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import open, { apps } from "open";
@@ -120,14 +120,25 @@ function attachLauncherErrorListener(
  * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb each
  * time the silenced `'error'` fires.
  *
- * **Profile leak**: each mount creates a fresh user-data-dir under
- * `os.tmpdir()` and intentionally does not clean it up — Chrome is unref'd
+ * **Profile leak**: a successful launch leaves a fresh user-data-dir under
+ * `os.tmpdir()` (macOS `/var/folders/.../T`, Linux `/tmp`, Windows
+ * `%TEMP%`) and intentionally does not clean it up — Chrome is unref'd
  * and the host has no reliable signal for "Chrome closed this profile,"
  * and deleting the dir while Chrome is still using it would corrupt the
- * live window. The OS reaps `/tmp` periodically; the profile state is
- * small (single window, no extensions) so accumulation is bounded.
+ * live window. The OS reaps tmpdir periodically (macOS does this every
+ * ~3 days; Linux on reboot or via systemd-tmpfiles); the profile state
+ * is small (single window, no extensions) so accumulation is bounded.
+ * When the function returns false (no Chromium found), the just-created
+ * dir is removed before returning so a caller-side fallback to a
+ * default-browser tab doesn't leak an empty profile.
  */
 async function openInAppMode(url: string): Promise<boolean> {
+  // Defensive: openUrl is server-constructed today (http://127.0.0.1:port/
+  // #token=...), but a future refactor could change that. Reject anything
+  // that isn't an http(s) URL so a stray `data:` or `javascript:` can't
+  // be smuggled into a chromeless window (no URL bar to warn the user).
+  if (!/^https?:\/\//i.test(url)) return false;
+
   // Each mount gets its own --user-data-dir so Chrome opens a separate
   // process and the chromeless window stays isolated from the user's
   // primary session. See docstring for the full rationale.
@@ -138,6 +149,15 @@ async function openInAppMode(url: string): Promise<boolean> {
     "--no-first-run",
     "--no-default-browser-check",
   ];
+
+  // Helper: remove the user-data-dir when we fall through without launching.
+  const cleanupProfile = async (): Promise<void> => {
+    try {
+      await rm(userDataDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; the OS reaper handles anything we miss.
+    }
+  };
 
   if (process.platform === "darwin") {
     for (const binPath of MACOS_CHROMIUM_BINARIES) {
@@ -155,6 +175,7 @@ async function openInAppMode(url: string): Promise<boolean> {
         // Try the next candidate.
       }
     }
+    await cleanupProfile();
     return false;
   }
 
@@ -173,6 +194,7 @@ async function openInAppMode(url: string): Promise<boolean> {
       // Try next candidate; `open` throws if the binary isn't installed.
     }
   }
+  await cleanupProfile();
   return false;
 }
 
