@@ -188,55 +188,12 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
   } as InboundConfig;
   writeLine(configLine);
 
-  // Two-phase exit finalization. The child's 'exit' event fires the
-  // moment the process ends, but Node may still have buffered stdout
-  // chunks queued for delivery to the 'data' listener. Settling .exited
-  // immediately on 'exit' lets pending view-op waiters be drained with
-  // "ui-leaf: process exited unexpectedly" before the binary's real
-  // last-second message (e.g. error/phase:build) reaches onEvent.
-  //
-  // Instead, capture the exit code on 'exit' and only settle .exited
-  // once stdout has also drained (its 'end' event fires). A short
-  // fallback timer guarantees forward progress on platforms where the
-  // pipe may never reach EOF after the process dies — Windows
-  // TerminateProcess leaves the pipe in an indeterminate state, and a
-  // cmd.exe shim wrapping the binary can hold the handle open too.
-  //
-  // See issue #57 for the Windows manifestation that motivated this.
-  let stdoutEnded = false;
-  let exitCaptured: { code: number | null } | null = null;
-  let exitFinalized = false;
-  const STDOUT_DRAIN_FALLBACK_MS = 200;
-
-  function maybeFinalizeExit(): void {
-    if (exitFinalized) return;
-    if (exitCaptured === null) return;
-    if (!stdoutEnded) return;
-    exitFinalized = true;
-    const { code } = exitCaptured;
-    let reason: ExitInfo["reason"];
-    if (observedCloseReason !== null) reason = observedCloseReason;
-    else if (killRequested) reason = "killed";
-    else reason = "unknown";
-
-    if (!readySettled) {
-      rejectReady(
-        new Error(
-          `ui-leaf: binary exited (code=${code}, reason=${reason}) before ready`,
-        ),
-      );
-    }
-    resolveExited({ code, reason });
-  }
-
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {
     for (const line of buffer.feed(chunk)) handleLine(line);
   });
   child.stdout?.on("end", () => {
     for (const line of buffer.flush()) handleLine(line);
-    stdoutEnded = true;
-    maybeFinalizeExit();
   });
 
   if (!silent) {
@@ -254,9 +211,6 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
       clearTimeout(killTimer);
       killTimer = null;
     }
-    // Bypass the drain-coordination — a spawn-time error means stdio
-    // may never have been opened in the first place.
-    exitFinalized = true;
     rejectReady(err);
     resolveExited({ code: null, reason: "error" });
   });
@@ -267,17 +221,19 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
       clearTimeout(killTimer);
       killTimer = null;
     }
-    exitCaptured = { code };
-    if (stdoutEnded) {
-      maybeFinalizeExit();
-      return;
+    let reason: ExitInfo["reason"];
+    if (observedCloseReason !== null) reason = observedCloseReason;
+    else if (killRequested) reason = "killed";
+    else reason = "unknown";
+
+    if (!readySettled) {
+      rejectReady(
+        new Error(
+          `ui-leaf: binary exited (code=${code}, reason=${reason}) before ready`,
+        ),
+      );
     }
-    // Force-finalize after the fallback window in case stdout never closes.
-    const drainTimer = setTimeout(() => {
-      stdoutEnded = true;
-      maybeFinalizeExit();
-    }, STDOUT_DRAIN_FALLBACK_MS);
-    drainTimer.unref?.();
+    resolveExited({ code, reason });
   });
 
   // ---- Handle ------------------------------------------------------------
