@@ -187,7 +187,11 @@ async function openInAppMode(url: string): Promise<boolean> {
       const child = (await open(url, { app: { name: app, arguments: launchArgs } })) as
         | ChildProcess
         | undefined;
-      attachLauncherErrorListener(child, app);
+      // `apps.<name>` is typed as `string | readonly string[]` (some entries
+      // carry fallback binary paths); flatten to a single string for the
+      // diagnostic label.
+      const label = Array.isArray(app) ? app.join(",") : (app as string);
+      attachLauncherErrorListener(child, label);
       child?.unref?.();
       return true;
     } catch {
