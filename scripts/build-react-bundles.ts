@@ -59,17 +59,13 @@ const ENTRIES: readonly Entry[] = [
  * occurrence that motivated this).
  */
 function addNamedExports(bundledEsm: string, id: string): string {
-  const tail = (n = 500) => bundledEsm.slice(-n);
-  const fail = (which: string, extra = ""): never => {
-    throw new Error(
-      `addNamedExports[${id}]: ${which} regex did not match.${extra ? " " + extra : ""}\n--- bundle tail (last 500 bytes) ---\n${tail()}\n--- end tail ---`,
-    );
-  };
+  const failMsg = (which: string, extra = ""): string =>
+    `addNamedExports[${id}]: ${which} regex did not match.${extra ? " " + extra : ""}\n--- bundle tail (last 500 bytes) ---\n${bundledEsm.slice(-500)}\n--- end tail ---`;
 
   // Find `export default require_X()` at the end of the bundle.
   const defaultMatch = bundledEsm.match(/export default (\w+)\(\);?\s*$/);
-  if (!defaultMatch?.[1]) fail("default-export-tail");
-  const requireFnName = defaultMatch![1]!;
+  if (!defaultMatch?.[1]) throw new Error(failMsg("default-export-tail"));
+  const requireFnName = defaultMatch[1];
 
   // Find which exports_Y variable the wrapper assigns to module.exports.
   const requireFnPattern = new RegExp(
@@ -77,9 +73,9 @@ function addNamedExports(bundledEsm: string, id: string): string {
   );
   const requireFnMatch = bundledEsm.match(requireFnPattern);
   if (!requireFnMatch?.[1]) {
-    fail("commonjs-shim", `requireFnName=${requireFnName}`);
+    throw new Error(failMsg("commonjs-shim", `requireFnName=${requireFnName}`));
   }
-  const exportsVarName = requireFnMatch![1]!;
+  const exportsVarName = requireFnMatch[1];
 
   // Find __export(exports_Y, { key: ..., key2: ... }) to harvest export names.
   const exportCallPattern = new RegExp(
@@ -87,19 +83,22 @@ function addNamedExports(bundledEsm: string, id: string): string {
   );
   const exportCallMatch = bundledEsm.match(exportCallPattern);
   if (!exportCallMatch?.[1]) {
-    fail("__export-call", `exportsVarName=${exportsVarName}`);
+    throw new Error(failMsg("__export-call", `exportsVarName=${exportsVarName}`));
   }
+  const exportGroup = exportCallMatch[1];
 
   const names: string[] = [];
   const keyRe = /\b(\w+):/g;
   let k;
-  while ((k = keyRe.exec(exportCallMatch![1]!)) !== null) {
+  while ((k = keyRe.exec(exportGroup)) !== null) {
     names.push(k[1]!);
   }
   if (names.length === 0) {
-    fail(
-      "export-names-empty",
-      `exportsVarName=${exportsVarName}, group=${exportCallMatch![1]!.slice(0, 200)}`,
+    throw new Error(
+      failMsg(
+        "export-names-empty",
+        `exportsVarName=${exportsVarName}, group=${exportGroup.slice(0, 200)}`,
+      ),
     );
   }
 
