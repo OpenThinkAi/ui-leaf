@@ -204,12 +204,14 @@ export type EventHandler = (event: OutboundMessage) => void;
 export interface SpawnedHandle {
   readonly ready: Promise<ReadyInfo>;
   /**
-   * Resolves after the child process has ended *and* its stdio streams have
-   * fully drained — i.e. after Node's `'close'` event, not `'exit'`. This
-   * means callers racing `.exited` against other promises will see it
-   * settle a tick or two later than the raw process-end moment, but with
-   * the guarantee that any final stdout `data` event has been delivered
-   * to `onEvent` first. See #57 for the Windows race this avoids.
+   * Resolves after the child process exits *and* its stdout has either
+   * reached EOF or a short fallback drain window has elapsed — whichever
+   * comes first. The drain step gives the binary's last few stdout chunks
+   * a chance to be delivered to `onEvent` before consumers see `.exited`
+   * settle, so callers racing pending view-op promises against `.exited`
+   * see the real outcome (e.g. an error/phase:build) rather than a
+   * generic "process exited unexpectedly" rejection. See #57 for the
+   * Windows manifestation that motivated this.
    */
   readonly exited: Promise<ExitInfo>;
   /** Write a JSON line to the binary's stdin. Caller stamps `version:"1"`. */
