@@ -48,13 +48,27 @@ export type Shell = "tab" | "app";
  * no URL bar, no tabs). Returns true if a Chromium browser was found and
  * launched, false if no Chromium variant is installed (caller should fall
  * back to the default-browser tab).
+ *
+ * The `open` library resolves with a ChildProcess once spawn succeeds.
+ * Post-spawn failures (Chromium refusing the `--app=URL` handoff, the
+ * helper binary exiting non-zero after delivering an Apple Event, etc.)
+ * are emitted as `'error'` events on that child. Node converts an
+ * unhandled `'error'` into `uncaughtException` and crashes the host
+ * process — which manifested as the mount binary dying when a stray
+ * unauthenticated request hit the server in `shell:"app"` mode (timing
+ * made it look like the request caused the exit, but the real trigger
+ * was the launcher's delayed failure being raised inside the same event
+ * loop tick as the stray request). Defensively swallow post-spawn errors
+ * and `unref()` the child so its exit can't keep the event loop alive.
  */
 async function openInAppMode(url: string): Promise<boolean> {
   // Order: most-common Chromium variants first.
   const candidates = [apps.chrome, apps.edge, apps.brave];
   for (const app of candidates) {
     try {
-      await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
+      const child = await open(url, { app: { name: app, arguments: [`--app=${url}`] } });
+      child?.on?.("error", () => { /* silenced; see docstring */ });
+      child?.unref?.();
       return true;
     } catch {
       // Try next candidate; `open` throws if the binary isn't installed.
