@@ -77,27 +77,61 @@ function addNamedExports(bundledEsm: string, id: string): string {
   }
   const exportsVarName = requireFnMatch[1];
 
-  // Find __export(exports_Y, { key: ..., key2: ... }) to harvest export names.
+  // Harvest the set of names exported by the CJS module. Bun emits two
+  // distinct output shapes for the same React source:
+  //
+  //   "getter" shape (macOS/Linux):
+  //     __export(exports_react_production, { useState: () => $useState, ... })
+  //
+  //   "assignment" shape (Windows, per issue #49):
+  //     exports.useState = function (...) { ... };
+  //     exports.version = "19.2.5";
+  //
+  // Try the getter shape first; if not present, fall back to scanning direct
+  // `exports.NAME =` assignments. Both produce the same public name set —
+  // they're just different lowerings of the same CJS module-record. The
+  // downstream destructure+re-export below only cares about the names.
+  const names: string[] = [];
   const exportCallPattern = new RegExp(
     `__export\\(${exportsVarName},\\{([^}]+)\\}`,
   );
   const exportCallMatch = bundledEsm.match(exportCallPattern);
-  if (!exportCallMatch?.[1]) {
-    throw new Error(failMsg("__export-call", `exportsVarName=${exportsVarName}`));
-  }
-  const exportGroup = exportCallMatch[1];
-
-  const names: string[] = [];
-  const keyRe = /\b(\w+):/g;
-  let k;
-  while ((k = keyRe.exec(exportGroup)) !== null) {
-    names.push(k[1]!);
+  if (exportCallMatch?.[1]) {
+    const exportGroup = exportCallMatch[1];
+    const keyRe = /\b(\w+):/g;
+    let k;
+    while ((k = keyRe.exec(exportGroup)) !== null) {
+      names.push(k[1]!);
+    }
+  } else {
+    // Assignment shape. On Windows the `exportsVarName` captured above is
+    // an inner `require_X_production` function name (because the outer
+    // wrapper does `module.exports = require_X_production()` rather than
+    // `module.exports = exports_X`). Scope the `exports.NAME =` scan to
+    // *that* inner `__commonJS` callback body so a multi-module bundle
+    // (e.g. react-dom + scheduler) doesn't bleed unrelated `exports.NAME`
+    // assignments into the harvested list. If we can't find the inner
+    // body for any reason, fall back to a whole-bundle scan — extra
+    // harmless `undefined` re-exports beats throwing on the contained
+    // failure mode.
+    const innerBodyRe = new RegExp(
+      `var ${exportsVarName}=__commonJS\\(\\([^)]*\\)=>\\{([\\s\\S]*?)\\}\\);`,
+    );
+    const innerBodyMatch = bundledEsm.match(innerBodyRe);
+    const scanRegion = innerBodyMatch?.[1] ?? bundledEsm;
+    const seen = new Set<string>();
+    const assignRe = /\bexports\.([A-Za-z_$][\w$]*)\s*=/g;
+    let m;
+    while ((m = assignRe.exec(scanRegion)) !== null) {
+      seen.add(m[1]!);
+    }
+    for (const n of seen) names.push(n);
   }
   if (names.length === 0) {
     throw new Error(
       failMsg(
-        "export-names-empty",
-        `exportsVarName=${exportsVarName}, group=${exportGroup.slice(0, 200)}`,
+        "no-export-names",
+        `exportsVarName=${exportsVarName}; neither __export(...) nor exports.NAME= shape matched`,
       ),
     );
   }
