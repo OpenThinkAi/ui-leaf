@@ -3,8 +3,8 @@ import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto
 import { constants as fsConstants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import open, { apps } from "open";
+import { delimiter, join } from "node:path";
+import open from "open";
 import { compileView, compileSource } from "./compile.js";
 import type { CloseReason } from "./ipc.js";
 
@@ -58,6 +58,61 @@ const MACOS_CHROMIUM_BINARIES = [
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 ];
 
+// Windows install-path candidates for Chromium-family browsers. Probed in
+// order; first executable wins. Spawning directly (rather than via the
+// `open` library, which shells through `cmd /c start chrome.exe …`) gives
+// us a usable PID to track so the window can be torn down on unmount.
+function windowsChromiumBinaries(): string[] {
+  const programFiles = process.env["ProgramFiles"] ?? "C:\\Program Files";
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const localAppData = process.env["LOCALAPPDATA"];
+  const candidates = [
+    join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    join(
+      programFilesX86,
+      "BraveSoftware",
+      "Brave-Browser",
+      "Application",
+      "brave.exe",
+    ),
+  ];
+  if (localAppData) {
+    candidates.unshift(
+      join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+    );
+  }
+  return candidates;
+}
+
+// Linux Chromium-family command names. Resolved against PATH (no shell
+// invocation — we walk `process.env.PATH` ourselves so we can build an
+// absolute path for the direct spawn, which is what gives us a usable PID
+// for the cleanup-on-unmount path).
+const LINUX_CHROMIUM_COMMANDS = [
+  "google-chrome",
+  "google-chrome-stable",
+  "chromium",
+  "chromium-browser",
+  "microsoft-edge",
+  "microsoft-edge-stable",
+  "brave-browser",
+];
+
+async function resolveOnPath(command: string): Promise<string | null> {
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return null;
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    if (await isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function isExecutable(path: string): Promise<boolean> {
   try {
     await access(path, fsConstants.X_OK);
@@ -88,56 +143,70 @@ function attachLauncherErrorListener(
 
 /**
  * Try to open `url` in a Chromium browser's --app mode (chromeless window:
- * no URL bar, no tabs). Returns true if a Chromium browser was found and
- * launched, false if no Chromium variant is installed (caller should fall
- * back to the default-browser tab).
+ * no URL bar, no tabs). Returns the spawned `ChildProcess` handle when a
+ * Chromium browser was found and launched (the caller tracks it so the
+ * window can be torn down on unmount — see startDevServer's cleanup()),
+ * or `null` when no Chromium variant is installed (caller falls back to
+ * the default-browser tab).
  *
- * **macOS direct-spawn path** (ui-leaf#55): on macOS the `open` library
- * shells out to `/usr/bin/open -a "Google Chrome" --args …`. When Chrome
- * is already running with the user's default profile, that delivers an
- * AppleEvent to the existing instance which silently drops the `--args`
- * (only fresh-launch `main()` receives them), so `--app=URL` is ignored
- * and the URL opens in a normal tab — no chromeless window appears. The
- * fix is to spawn the bundle binary directly via `child_process.spawn`,
- * bypassing `/usr/bin/open` entirely, plus pass `--user-data-dir=<tmp>`
- * to a fresh per-mount temp profile so Chrome opens a separate process
- * (single-instance lock is per-profile) and `--app=` actually takes
- * effect.
+ * **Direct-spawn on every platform.** We deliberately do NOT route through
+ * the `open` library here:
  *
- * **Linux/Windows path**: defer to the `open` library, which spawns the
- * browser binary directly on those platforms (not through a LaunchServices
- * shim), so launch args reach the new Chrome process on cold launch.
- * `--user-data-dir=<tmp>` is still useful here for isolation and to dodge
- * any single-instance behaviour.
+ *   - macOS (ui-leaf#55): `open` shells out to `/usr/bin/open -a "Google
+ *     Chrome" --args …`. When Chrome is already running with the user's
+ *     default profile, that delivers an AppleEvent to the existing
+ *     instance which silently drops the `--args` (only fresh-launch
+ *     `main()` receives them), so `--app=URL` is ignored. Direct spawn
+ *     bypasses LaunchServices, and a per-mount `--user-data-dir` opens a
+ *     separate process so `--app=` actually takes effect.
  *
- * **Crash containment** (ui-leaf#54): the spawned ChildProcess can emit a
- * delayed `'error'` event post-spawn (Chromium rejecting the launch flags,
- * helper binary exiting non-zero after delivering its message). Node
- * promotes unhandled `'error'` to `uncaughtException` and kills the host;
- * we attach a no-op listener and `unref()` the child so launcher failures
- * stay contained.
+ *   - Windows: `open` shells through `cmd /c start chrome.exe …`. The
+ *     child we get back is the launcher shim, not chrome.exe — its PID
+ *     is useless for tearing the window down later. Direct spawn gives
+ *     us a real handle on the browser process itself, which is the only
+ *     way cleanup() can reliably close the window on unmount.
  *
- * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb each
- * time the silenced `'error'` fires.
+ *   - Linux: same PID-tracking concern as Windows; the `open` path
+ *     usually goes via `xdg-open` and we lose the browser PID.
  *
- * **Profile leak**: a successful launch leaves a fresh user-data-dir under
- * `os.tmpdir()` (macOS `/var/folders/.../T`, Linux `/tmp`, Windows
- * `%TEMP%`) and intentionally does not clean it up — Chrome is unref'd
- * and the host has no reliable signal for "Chrome closed this profile,"
- * and deleting the dir while Chrome is still using it would corrupt the
- * live window. The OS reaps tmpdir periodically (macOS does this every
- * ~3 days; Linux on reboot or via systemd-tmpfiles); the profile state
- * is small (single window, no extensions) so accumulation is bounded.
- * When the function returns false (no Chromium found), the just-created
+ * **Per-mount user-data-dir.** Each launch gets a fresh temp profile.
+ * That bypasses the single-instance lock so the spawn is a brand new
+ * Chrome process (not a tab/window in an existing user session), and it
+ * means "last window of this profile closes" reliably tears the process
+ * down — no inheriting the user's "continue background apps when Chrome
+ * is closed" setting.
+ *
+ * **--disable-background-mode** is passed as belt-and-suspenders on top
+ * of the fresh profile: it disables Chrome's background-mode behaviour
+ * for this instance regardless of profile prefs, so the helper processes
+ * don't linger after the window closes (the Windows orphan-process
+ * scenario this whole code path exists to fix).
+ *
+ * **Crash containment** (ui-leaf#54): the spawned ChildProcess can emit
+ * a delayed `'error'` event post-spawn (Chromium rejecting the launch
+ * flags, helper exiting non-zero). Node promotes unhandled `'error'` to
+ * `uncaughtException` and kills the host; `attachLauncherErrorListener`
+ * attaches a no-op listener so launcher failures stay contained. The
+ * child is `unref()`'d so it doesn't keep the host's event loop alive,
+ * but the JS reference is retained by the caller for cleanup-time kill.
+ *
+ * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb
+ * each time the silenced `'error'` fires.
+ *
+ * **Profile leak**: a successful launch leaves a fresh user-data-dir
+ * under `os.tmpdir()` and intentionally does not clean it up — when
+ * cleanup() kills the Chrome tree we can't safely remove a directory
+ * Chrome may still be flushing to. The OS reaps tmpdir periodically.
+ * When this function returns null (no Chromium found), the just-created
  * dir is removed before returning so a caller-side fallback to a
  * default-browser tab doesn't leak an empty profile.
  */
-async function openInAppMode(url: string): Promise<boolean> {
+async function openInAppMode(url: string): Promise<ChildProcess | null> {
   // Defensive: openUrl is server-constructed today (http://127.0.0.1:port/
   // #token=...), but a future refactor could change that. Reject anything
   // that isn't an http(s) URL so a stray `data:` or `javascript:` can't
   // be smuggled into a chromeless window (no URL bar to warn the user).
-  if (!/^https?:\/\//i.test(url)) return false;
+  if (!/^https?:\/\//i.test(url)) return null;
 
   // Each mount gets its own --user-data-dir so Chrome opens a separate
   // process and the chromeless window stays isolated from the user's
@@ -148,6 +217,10 @@ async function openInAppMode(url: string): Promise<boolean> {
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Without this, Chrome on Windows can keep helper processes alive
+    // after the last window of the profile closes, surfacing as orphan
+    // chrome.exe entries in Task Manager that pile up across runs.
+    "--disable-background-mode",
   ];
 
   // Helper: remove the user-data-dir when we fall through without launching.
@@ -159,47 +232,126 @@ async function openInAppMode(url: string): Promise<boolean> {
     }
   };
 
+  // Resolve the first usable Chromium binary for this platform. macOS
+  // probes known bundle paths; Linux walks PATH; Windows checks known
+  // install paths.
+  let binPath: string | null = null;
   if (process.platform === "darwin") {
-    for (const binPath of MACOS_CHROMIUM_BINARIES) {
-      if (!(await isExecutable(binPath))) continue;
-      try {
-        const child = spawn(binPath, launchArgs, {
-          detached: true,
-          stdio: "ignore",
-        });
-        attachLauncherErrorListener(child, binPath);
-        child.unref();
-        return true;
-      } catch {
-        // Spawn can throw synchronously on EPERM, ENOENT-after-access-race, etc.
-        // Try the next candidate.
+    for (const p of MACOS_CHROMIUM_BINARIES) {
+      if (await isExecutable(p)) {
+        binPath = p;
+        break;
       }
     }
-    await cleanupProfile();
-    return false;
-  }
-
-  // Linux / Windows: defer to the `open` library, which spawns the browser
-  // binary directly (no LaunchServices shim) so launch args are honored.
-  const candidates = [apps.chrome, apps.edge, apps.brave];
-  for (const app of candidates) {
-    try {
-      const child = (await open(url, { app: { name: app, arguments: launchArgs } })) as
-        | ChildProcess
-        | undefined;
-      // `apps.<name>` is typed as `string | readonly string[]` (some entries
-      // carry fallback binary paths); flatten to a single string for the
-      // diagnostic label.
-      const label = Array.isArray(app) ? app.join(",") : (app as string);
-      attachLauncherErrorListener(child, label);
-      child?.unref?.();
-      return true;
-    } catch {
-      // Try next candidate; `open` throws if the binary isn't installed.
+  } else if (process.platform === "win32") {
+    for (const p of windowsChromiumBinaries()) {
+      if (await isExecutable(p)) {
+        binPath = p;
+        break;
+      }
+    }
+  } else {
+    for (const cmd of LINUX_CHROMIUM_COMMANDS) {
+      const resolved = await resolveOnPath(cmd);
+      if (resolved) {
+        binPath = resolved;
+        break;
+      }
     }
   }
-  await cleanupProfile();
-  return false;
+
+  if (!binPath) {
+    await cleanupProfile();
+    return null;
+  }
+
+  try {
+    // detached + own session/process group so cleanup() can signal the
+    // whole tree (helper processes included). Windows ignores `detached`
+    // for SIGTERM purposes — cleanup() uses `taskkill /T` there.
+    const child = spawn(binPath, launchArgs, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    attachLauncherErrorListener(child, binPath);
+    // unref so a still-running Chrome doesn't keep the host's event loop
+    // alive after the server closes. We retain the JS reference for the
+    // cleanup-time kill (unref only affects event-loop accounting).
+    child.unref();
+    return child;
+  } catch {
+    // spawn can throw synchronously on EPERM, ENOENT-after-access-race, etc.
+    await cleanupProfile();
+    return null;
+  }
+}
+
+/**
+ * Terminate a Chromium child spawned by openInAppMode. Best-effort and
+ * non-throwing: if the child has already exited, this is a no-op.
+ *
+ * **INVARIANT**: this is only ever called from startDevServer's
+ * cleanup() — never from the heartbeat watcher / `disconnected` event.
+ * A minimized window must keep the Chrome process alive (heartbeats can
+ * pause indefinitely while minimized; killing on that signal would close
+ * the window the user is intentionally hiding). The only legitimate kill
+ * triggers are explicit unmount (caller invoked `close()`), process
+ * shutdown, or an unrecoverable server error — all of which route
+ * through cleanup().
+ */
+function killChromeTree(child: ChildProcess): void {
+  // `killed` flips after a successful signal; once set, further signals
+  // are no-ops. Don't gate on `exitCode != null` — on detached children
+  // we may not have received the exit event yet at cleanup time.
+  if (child.killed) return;
+  const pid = child.pid;
+  if (pid === undefined) return;
+
+  if (process.platform === "win32") {
+    // SIGTERM doesn't propagate to a Windows process tree, and Chrome
+    // spawns helper processes (renderer/gpu/utility) that would otherwise
+    // outlive the parent. `taskkill /T /F` kills the tree forcefully.
+    try {
+      const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => {
+        // taskkill missing or refused — fall back to the JS-side kill.
+        try {
+          child.kill();
+        } catch {
+          /* already gone */
+        }
+      });
+      killer.unref();
+    } catch {
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+    }
+    return;
+  }
+
+  // POSIX: the child was spawned `detached: true`, so it leads its own
+  // process group. Signal the negative PID to reach the whole group
+  // (includes Chrome's renderer/gpu/utility helpers).
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch (err) {
+    // ESRCH: group already gone. EPERM: rare (we own it). Fall back to a
+    // direct child.kill() either way; if it's already dead, no-op.
+    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
 }
 
 /**
@@ -610,6 +762,17 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     // construction, only after the server is running.
     let bunServer!: ReturnType<typeof Bun.serve>;
 
+    // Chromium --app windows we spawned for this mount. Tracked so unmount
+    // can tear them down — without this, every mount leaves an orphan
+    // window when the host CLI exits, and they pile up across sessions.
+    // Children are added by the launch path below and removed on their
+    // own 'exit' (so a user-closed window doesn't stay in the set
+    // indefinitely). cleanup() iterates and signals the survivors.
+    // INVARIANT: nothing outside cleanup() may kill these. The heartbeat
+    // watcher must never reach into this set — a minimized window pauses
+    // heartbeats and would be killed under the user's feet otherwise.
+    const trackedAppWindows = new Set<ChildProcess>();
+
     const cleanup = async (reason: CloseReason): Promise<void> => {
       if (closeRequested) return;
       closeRequested = true;
@@ -619,6 +782,13 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         try { controller.close(); } catch { /* already closed */ }
       }
       sseClients.clear();
+      // Tear down any --app windows we spawned. Done before bunServer.stop
+      // so the window closes promptly even if the graceful HTTP shutdown
+      // is slow (or stuck on a hung in-flight request).
+      for (const child of trackedAppWindows) {
+        killChromeTree(child);
+      }
+      trackedAppWindows.clear();
       // Graceful stop: waits for in-flight writes (including the closing SSE
       // event) to flush before tearing down TCP connections.
       await bunServer.stop();
@@ -687,13 +857,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
-            const launched = await openInAppMode(openUrl);
-            if (!launched) {
-              process.stderr.write(
-                `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
-              );
-              await open(openUrl);
+            const child = await openInAppMode(openUrl);
+            if (child) {
+              trackedAppWindows.add(child);
+              // Drop the entry when Chrome exits on its own (user closed
+              // the window, helper crash, etc.). Keeps the set bounded and
+              // means cleanup() won't waste a signal on a dead PID.
+              child.once("exit", () => trackedAppWindows.delete(child));
+              return;
             }
+            process.stderr.write(
+              `ui-leaf: shell:"app" requested but no Chromium browser found; falling back to default browser tab.\n`,
+            );
+            await open(openUrl);
           } else {
             await open(openUrl);
           }
