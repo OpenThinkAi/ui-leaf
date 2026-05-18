@@ -70,6 +70,11 @@ function windowsChromiumBinaries(): string[] {
   const candidates = [
     join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
     join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    // Edge ships native-arch installers, so 64-bit Windows lands at
+    // Program Files (not the x86 path). Probe both — an Edge-only host
+    // would otherwise fall through to a default-browser tab and silently
+    // defeat the whole shell:"app" path.
+    join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
     join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
     join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
     join(
@@ -272,7 +277,6 @@ async function openInAppMode(url: string): Promise<ChildProcess | null> {
     const child = spawn(binPath, launchArgs, {
       detached: true,
       stdio: "ignore",
-      windowsHide: false,
     });
     attachLauncherErrorListener(child, binPath);
     // unref so a still-running Chrome doesn't keep the host's event loop
@@ -338,19 +342,13 @@ function killChromeTree(child: ChildProcess): void {
 
   // POSIX: the child was spawned `detached: true`, so it leads its own
   // process group. Signal the negative PID to reach the whole group
-  // (includes Chrome's renderer/gpu/utility helpers).
+  // (includes Chrome's renderer/gpu/utility helpers). If this throws —
+  // ESRCH (group gone) or EPERM (would also fail a direct child.kill) —
+  // we're past recourse; best-effort is good enough here.
   try {
     process.kill(-pid, "SIGTERM");
-  } catch (err) {
-    // ESRCH: group already gone. EPERM: rare (we own it). Fall back to a
-    // direct child.kill() either way; if it's already dead, no-op.
-    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* already gone */
-      }
-    }
+  } catch {
+    /* already gone or unsignalable */
   }
 }
 
