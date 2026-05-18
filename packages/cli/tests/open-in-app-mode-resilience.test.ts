@@ -1,20 +1,23 @@
-// Regression test for ui-leaf#54 + ui-leaf#55. openInAppMode's launcher
-// can emit a delayed `'error'` event on the spawned child (Chromium
-// rejecting the `--app=URL` handoff, helper exiting non-zero post-Apple-
-// Event delivery, etc.). Without a listener Node promotes that to
-// uncaughtException and crashes the host (#54). On macOS we additionally
-// bypass `/usr/bin/open` and spawn the Chromium binary directly with
-// `--user-data-dir=<tmp>` so launch args aren't dropped by the AppleEvent
-// route to an already-running instance (#55).
+// Regression test for ui-leaf#54 + ui-leaf#55 + the Windows orphan-window
+// cleanup work (this file's expanded scope).
 //
-// The test exercises both paths:
-//   - darwin: mock `node:child_process.spawn` (and `node:fs/promises.access`
-//             so the binary is found without filesystem state)
-//   - linux/win: mock the `open` library
+// openInAppMode's launcher can emit a delayed `'error'` event on the
+// spawned child (Chromium rejecting the `--app=URL` handoff, helper
+// exiting non-zero post-Apple-Event delivery, etc.). Without a listener
+// Node promotes that to uncaughtException and crashes the host (#54). On
+// every platform we bypass the OS launcher shim and spawn the Chromium
+// binary directly with `--user-data-dir=<tmp>` so launch args aren't
+// dropped (#55) AND so we have a real PID to track for cleanup on
+// unmount (the Windows orphan fix).
 //
-// Both paths share the listener-attachment contract via
-// attachLauncherErrorListener; the test asserts that contract holds on the
-// platform we're running on, plus checks the spawn-args shape on darwin.
+// The test mocks `node:child_process.spawn` on every platform plus the
+// fs.access probe that gates binary discovery, then asserts:
+//   - the silenced 'error' listener is attached + child is unref'd (#54)
+//   - `--app=`, `--user-data-dir=`, and `--disable-background-mode` are
+//     in the launch args
+//   - server.close() signals the tracked Chrome PID (cleanup-on-unmount)
+//   - heartbeat timeout does NOT signal the Chrome PID (minimize-safety
+//     INVARIANT — a minimized window must never be killed)
 //
 // Companion to shell-app-stray-connection.test.ts, which guards the
 // broader "mount survives stray unauth traffic" behaviour via the
@@ -26,27 +29,71 @@ import { join } from "node:path";
 
 const VIEWS_ROOT = join(import.meta.dir, "fixtures/views");
 const IS_DARWIN = process.platform === "darwin";
+const IS_WIN = process.platform === "win32";
 
 class FakeChildProcess extends EventEmitter {
+  pid = 424242;
+  killed = false;
   unrefCount = 0;
+  killCalls: Array<string | number | undefined> = [];
   unref(): void {
     this.unrefCount++;
   }
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.killCalls.push(signal);
+    this.killed = true;
+    return true;
+  }
 }
 
-// Captured by whichever mock the current platform takes.
+// Captured by the spawn mock.
 const childRef: { current: FakeChildProcess | null } = { current: null };
 const spawnLog: Array<{ command: string; args: readonly string[] }> = [];
-const openLog: Array<{ url: string; appArgs: readonly string[] }> = [];
+// Captured taskkill calls on Windows (cleanup path).
+const taskkillLog: Array<readonly string[]> = [];
+// Captured process.kill(pid, signal) calls (POSIX cleanup path).
+const processKillLog: Array<{ pid: number; signal: string | number | undefined }> = [];
+
+// Pretend whichever binary the platform's discovery loop probes first
+// exists. macOS uses bundle paths; Windows uses `Program Files`; Linux
+// walks PATH.
+mock.module("node:fs/promises", () => {
+  const real = require("node:fs/promises") as typeof import("node:fs/promises");
+  const access = async (path: unknown, _mode?: unknown): Promise<void> => {
+    if (typeof path !== "string") throw new Error("ENOENT (test-mocked)");
+    if (IS_DARWIN && path.includes("Google Chrome.app")) return;
+    if (IS_WIN && path.toLowerCase().endsWith("chrome.exe")) return;
+    if (!IS_DARWIN && !IS_WIN && path.endsWith("/google-chrome")) return;
+    throw new Error("ENOENT (test-mocked)");
+  };
+  return { ...real, default: { ...real, access }, access };
+});
+
+mock.module("node:child_process", () => {
+  const real = require("node:child_process") as typeof import("node:child_process");
+  const fakeSpawn = ((command: string, args: readonly string[]) => {
+    if (command === "taskkill") {
+      taskkillLog.push([...args]);
+      // taskkill child also needs to be an EventEmitter (the code attaches
+      // an 'error' listener and calls unref()). It does NOT need to be the
+      // childRef captured — that one is the tracked Chrome process.
+      const tk = new FakeChildProcess();
+      return tk as unknown as ReturnType<typeof real.spawn>;
+    }
+    spawnLog.push({ command, args: [...args] });
+    const child = makeFakeChildEmittingError(command);
+    childRef.current = child;
+    return child as unknown as ReturnType<typeof real.spawn>;
+  }) as unknown as typeof real.spawn;
+  return { ...real, default: { ...real, spawn: fakeSpawn }, spawn: fakeSpawn };
+});
 
 function makeFakeChildEmittingError(label: string): FakeChildProcess {
   const child = new FakeChildProcess();
-  // Defer the 'error' emit to the next macrotask (check phase) so
-  // attachLauncherErrorListener can attach before we fire. The real
-  // failure shape (Chromium refusing the launch flags, helper exit
-  // post-AppleEvent) comes from OS signals which are macrotask-scheduled.
-  // If the listener wasn't attached, this emit would become
-  // uncaughtException and crash the test runner.
+  // Defer the 'error' emit to the next macrotask so
+  // attachLauncherErrorListener can attach before we fire. If the
+  // listener wasn't attached, this emit would become uncaughtException
+  // and crash the test runner.
   setImmediate(() =>
     child.emit(
       "error",
@@ -56,45 +103,14 @@ function makeFakeChildEmittingError(label: string): FakeChildProcess {
   return child;
 }
 
-// Platform-specific module mocks must run BEFORE the dynamic import of
-// server.ts so the server module evaluates against the mocks.
-if (IS_DARWIN) {
-  // Pretend the first macOS Chromium binary exists; skip the others. The
-  // spawn mock catches the resulting spawn() call.
-  mock.module("node:fs/promises", () => {
-    const real = require("node:fs/promises") as typeof import("node:fs/promises");
-    const access = async (path: unknown, _mode?: unknown): Promise<void> => {
-      if (typeof path === "string" && path.includes("Google Chrome.app")) return;
-      throw new Error("ENOENT (test-mocked)");
-    };
-    return { ...real, default: { ...real, access }, access };
-  });
-
-  mock.module("node:child_process", () => {
-    const real = require("node:child_process") as typeof import("node:child_process");
-    const fakeSpawn = ((command: string, args: readonly string[]) => {
-      spawnLog.push({ command, args: [...args] });
-      const child = makeFakeChildEmittingError(command);
-      childRef.current = child;
-      return child;
-    }) as unknown as typeof import("node:child_process").spawn;
-    return { ...real, default: { ...real, spawn: fakeSpawn }, spawn: fakeSpawn };
-  });
-} else {
-  mock.module("open", () => ({
-    default: async (
-      url: string,
-      opts?: { app?: { name: string; arguments?: readonly string[] } },
-    ) => {
-      const appArgs = opts?.app?.arguments ?? [];
-      openLog.push({ url, appArgs: [...appArgs] });
-      const child = makeFakeChildEmittingError(opts?.app?.name ?? "default-browser");
-      childRef.current = child;
-      return child;
-    },
-    apps: { chrome: "fake-chrome", edge: "fake-edge", brave: "fake-brave" },
-  }));
-}
+// Patch process.kill once — restored in afterEach to a no-op. The real
+// process.kill would target the test runner's own PID (or a sibling),
+// which we obviously don't want during a cleanup() test.
+const ORIGINAL_PROCESS_KILL = process.kill.bind(process);
+process.kill = ((pid: number, signal?: string | number) => {
+  processKillLog.push({ pid, signal });
+  return true;
+}) as typeof process.kill;
 
 // Dynamic import after mocks so server.ts evaluates with them in place.
 const { startDevServer } = await import("../src/server.ts");
@@ -109,7 +125,15 @@ afterEach(async () => {
   }
   childRef.current = null;
   spawnLog.length = 0;
-  openLog.length = 0;
+  taskkillLog.length = 0;
+  processKillLog.length = 0;
+});
+
+// Restore process.kill at module teardown so subsequent test files run
+// against the real one. bun:test doesn't expose afterAll for module
+// scope here; the import-time monkeypatch survives only this file.
+process.on("beforeExit", () => {
+  process.kill = ORIGINAL_PROCESS_KILL;
 });
 
 describe("openInAppMode resilience + launch-args contract", () => {
@@ -128,12 +152,10 @@ describe("openInAppMode resilience + launch-args contract", () => {
         silent: true,
       });
 
-      // Yield to the event loop's check phase so the fake child's
-      // setImmediate-scheduled 'error' emit fires before we assert.
       await new Promise((r) => setImmediate(r));
 
       // attachLauncherErrorListener must have attached an 'error' listener
-      // and unref()'d the child on whichever path ran.
+      // and unref()'d the child.
       expect(childRef.current).not.toBeNull();
       expect(childRef.current!.listenerCount("error")).toBeGreaterThanOrEqual(1);
       expect(childRef.current!.unrefCount).toBe(1);
@@ -146,8 +168,8 @@ describe("openInAppMode resilience + launch-args contract", () => {
     30_000,
   );
 
-  test.skipIf(!IS_DARWIN)(
-    "darwin: spawns Chromium binary directly (not via /usr/bin/open) with --user-data-dir (ui-leaf#55)",
+  test(
+    "direct-spawns the Chromium binary (not via launcher shim) with the expected launch args",
     async () => {
       server = await startDevServer({
         view: "trivial",
@@ -163,31 +185,42 @@ describe("openInAppMode resilience + launch-args contract", () => {
 
       await new Promise((r) => setImmediate(r));
 
-      // Exactly one spawn invocation against the Chrome bundle binary.
+      // Exactly one spawn invocation against a Chromium binary. We never
+      // shell out to /usr/bin/open, cmd.exe, or xdg-open here.
       expect(spawnLog).toHaveLength(1);
       const call = spawnLog[0]!;
-      expect(call.command).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+      if (IS_DARWIN) {
+        expect(call.command).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+        expect(call.command).not.toBe("/usr/bin/open");
+      } else if (IS_WIN) {
+        expect(call.command.toLowerCase()).toEndWith("chrome.exe");
+        expect(call.command.toLowerCase()).not.toContain("cmd.exe");
+      } else {
+        expect(call.command).toEndWith("/google-chrome");
+        expect(call.command).not.toContain("xdg-open");
+      }
 
-      // The launch args must include both --app= (to trigger chromeless
-      // window) and --user-data-dir= (to bypass single-instance lock — the
-      // #55 root cause). Order is implementation detail; presence matters.
+      // Launch-args contract: --app= triggers the chromeless window,
+      // --user-data-dir= forces a separate process (single-instance lock
+      // is per profile), --disable-background-mode keeps Chrome from
+      // sticking around after the last window closes (the Windows
+      // orphan-process behaviour we're plugging).
       const args = call.args;
       expect(args.some((a) => a.startsWith("--app="))).toBe(true);
       expect(args.some((a) => a.startsWith("--user-data-dir="))).toBe(true);
       expect(args).toContain("--no-first-run");
       expect(args).toContain("--no-default-browser-check");
-
-      // We did NOT shell out through /usr/bin/open — that's the whole point.
-      expect(call.command).not.toBe("/usr/bin/open");
-      expect(call.command).not.toBe("open");
+      expect(args).toContain("--disable-background-mode");
     },
     30_000,
   );
+});
 
-  test.skipIf(IS_DARWIN)(
-    "linux/windows: open() called with --user-data-dir and --app= args",
+describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
+  test(
+    "server.close() signals the tracked Chrome process (window closes on unmount)",
     async () => {
-      server = await startDevServer({
+      const srv = await startDevServer({
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -200,13 +233,83 @@ describe("openInAppMode resilience + launch-args contract", () => {
       });
 
       await new Promise((r) => setImmediate(r));
+      expect(childRef.current).not.toBeNull();
+      const tracked = childRef.current!;
 
-      expect(openLog.length).toBeGreaterThanOrEqual(1);
-      const appArgs = openLog[0]!.appArgs;
-      expect(appArgs.some((a) => a.startsWith("--app="))).toBe(true);
-      expect(appArgs.some((a) => a.startsWith("--user-data-dir="))).toBe(true);
-      expect(appArgs).toContain("--no-first-run");
-      expect(appArgs).toContain("--no-default-browser-check");
+      // Trigger the unmount path. cleanup() should reach into
+      // trackedAppWindows and signal the Chrome PID.
+      await srv.close();
+      // server is now closed; null out the afterEach handle.
+      server = null;
+
+      if (IS_WIN) {
+        // Windows path uses taskkill /T /F against the tracked PID.
+        expect(taskkillLog.length).toBeGreaterThanOrEqual(1);
+        const args = taskkillLog[0]!;
+        expect(args).toContain("/pid");
+        expect(args).toContain(String(tracked.pid));
+        expect(args).toContain("/T");
+        expect(args).toContain("/F");
+      } else {
+        // POSIX path signals the negative PID (process group).
+        const groupSignals = processKillLog.filter((c) => c.pid === -tracked.pid);
+        expect(groupSignals.length).toBeGreaterThanOrEqual(1);
+        expect(groupSignals[0]!.signal).toBe("SIGTERM");
+      }
+    },
+    30_000,
+  );
+
+  test(
+    "heartbeat timeout does NOT signal the Chrome process (minimize-safety invariant)",
+    async () => {
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        // Aggressive timing: 50ms heartbeat with 10ms watcher tick and no
+        // startup grace. The "disconnected" event will fire well within
+        // the test window since we never POST /heartbeat.
+        heartbeatTimeoutMs: 50,
+        startupGraceMs: 0,
+        _heartbeatCheckIntervalMs: 10,
+        silent: true,
+      });
+
+      await new Promise((r) => setImmediate(r));
+      expect(childRef.current).not.toBeNull();
+      const tracked = childRef.current!;
+
+      // Observe the disconnected event so we know the heartbeat watcher
+      // actually fired (not just that time passed).
+      const disconnected = new Promise<void>((resolve) => {
+        server!.on("disconnected", () => resolve());
+      });
+
+      // Settle: wait for disconnect + a bit more for any (forbidden) kill
+      // path to run.
+      await Promise.race([
+        disconnected,
+        new Promise((r) => setTimeout(r, 500)),
+      ]);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // INVARIANT: no signal was sent to the tracked Chrome PID via any
+      // path. A minimized window must survive heartbeat pauses.
+      expect(tracked.killCalls).toHaveLength(0);
+      expect(taskkillLog).toHaveLength(0);
+      const signalsToTracked = processKillLog.filter(
+        (c) => c.pid === tracked.pid || c.pid === -tracked.pid,
+      );
+      expect(signalsToTracked).toHaveLength(0);
+
+      // Sanity: the server is still serving.
+      const res = await fetch(`${server!.url}/`);
+      await res.body?.cancel().catch(() => { });
+      expect(res.status).toBe(200);
     },
     30_000,
   );
