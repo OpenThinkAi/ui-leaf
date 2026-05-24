@@ -114,6 +114,62 @@ describe("ready", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Issue #58: a pre-ready binary exit surfaces the binary's real error cause
+// ---------------------------------------------------------------------------
+describe("pre-ready error propagation (#58)", () => {
+  test("a type:error frame before exit surfaces in the .ready rejection", async () => {
+    const handle = spawnMockViaBun({
+      script: [
+        {
+          kind: "emit",
+          msg: {
+            version: "1",
+            type: "error",
+            message: "Failed to start server. Is port 5810 in use?",
+          },
+        },
+        { kind: "exit", code: 1 },
+      ],
+    });
+    let rejected: Error | null = null;
+    try {
+      await handle.ready;
+    } catch (e) {
+      rejected = e as Error;
+    }
+    expect(rejected).not.toBeNull();
+    expect(rejected!.message).toContain(
+      "Failed to start server. Is port 5810 in use?",
+    );
+    // Once we have the real cause, the opaque reason token is dropped.
+    expect(rejected!.message).not.toContain("reason=unknown");
+    await handle.exited;
+  });
+
+  test("a mutate-response error (carries id) is NOT attached as the exit cause", async () => {
+    const handle = spawnMockViaBun({
+      script: [
+        {
+          kind: "emit",
+          msg: { version: "1", type: "error", id: 7, message: "mutate boom" },
+        },
+        { kind: "exit", code: 1 },
+      ],
+    });
+    let rejected: Error | null = null;
+    try {
+      await handle.ready;
+    } catch (e) {
+      rejected = e as Error;
+    }
+    expect(rejected).not.toBeNull();
+    expect(rejected!.message).not.toContain("mutate boom");
+    expect(rejected!.message).toContain("before ready");
+    await handle.exited;
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC #4: mutation dispatch (success / error / no-handler)
 // ---------------------------------------------------------------------------
 describe("mutation dispatch", () => {
