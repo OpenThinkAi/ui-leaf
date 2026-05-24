@@ -206,7 +206,54 @@ function attachLauncherErrorListener(
  * dir is removed before returning so a caller-side fallback to a
  * default-browser tab doesn't leak an empty profile.
  */
-async function openInAppMode(url: string): Promise<ChildProcess | null> {
+/**
+ * Build the Chromium `--app` launch argv. Extracted so the argv is
+ * unit-testable without spawning a real browser; deterministic in its return
+ * value (the only side effect is a diagnostic `console.warn` on bad input).
+ *
+ * When `windowSize` is provided, append `--window-size=W,H` so the chromeless
+ * window opens at the right size on first paint instead of snapping via
+ * `window.resizeTo()`. Non-finite or non-positive dimensions are not emitted
+ * as a flag — but they warn, since silently opening at the default size is a
+ * hard-to-spot footgun for a caller whose width/height computed to garbage.
+ */
+export function buildAppModeArgs(
+  url: string,
+  userDataDir: string,
+  windowSize?: { width: number; height: number },
+): string[] {
+  const args = [
+    `--app=${url}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    // Without this, Chrome on Windows can keep helper processes alive
+    // after the last window of the profile closes, surfacing as orphan
+    // chrome.exe entries in Task Manager that pile up across runs.
+    "--disable-background-mode",
+  ];
+  if (windowSize !== undefined) {
+    const { width, height } = windowSize;
+    if (
+      Number.isFinite(width) &&
+      Number.isFinite(height) &&
+      width > 0 &&
+      height > 0
+    ) {
+      args.push(`--window-size=${Math.round(width)},${Math.round(height)}`);
+    } else {
+      console.warn(
+        "ui-leaf: windowSize dimensions must be positive finite numbers; windowSize ignored",
+      );
+    }
+  }
+  return args;
+}
+
+async function openInAppMode(
+  url: string,
+  windowSize?: { width: number; height: number },
+): Promise<ChildProcess | null> {
   // Defensive: openUrl is server-constructed today (http://127.0.0.1:port/
   // #token=...), but a future refactor could change that. Reject anything
   // that isn't an http(s) URL so a stray `data:` or `javascript:` can't
@@ -217,16 +264,7 @@ async function openInAppMode(url: string): Promise<ChildProcess | null> {
   // process and the chromeless window stays isolated from the user's
   // primary session. See docstring for the full rationale.
   const userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
-  const launchArgs = [
-    `--app=${url}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    // Without this, Chrome on Windows can keep helper processes alive
-    // after the last window of the profile closes, surfacing as orphan
-    // chrome.exe entries in Task Manager that pile up across runs.
-    "--disable-background-mode",
-  ];
+  const launchArgs = buildAppModeArgs(url, userDataDir, windowSize);
 
   // Helper: remove the user-data-dir when we fall through without launching.
   const cleanupProfile = async (): Promise<void> => {
@@ -447,6 +485,8 @@ export interface DevServerOptions {
    *   with a stderr note. Safari and Firefox always fall back.
    */
   shell?: Shell;
+  /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
+  windowSize?: { width: number; height: number };
   /**
    * Browser silence (ms) after which the mount transitions to disconnected.
    * The mount does NOT terminate on disconnect — only explicit close/signal/error does.
@@ -544,6 +584,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     port,
     openBrowser = true,
     shell = "tab",
+    windowSize,
     heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
     csp = "strict",
@@ -855,7 +896,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
-            const child = await openInAppMode(openUrl);
+            const child = await openInAppMode(openUrl, windowSize);
             if (child) {
               trackedAppWindows.add(child);
               // Drop the entry when Chrome exits on its own (user closed
