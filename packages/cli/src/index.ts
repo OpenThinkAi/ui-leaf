@@ -101,6 +101,8 @@ export interface MountOptions {
    * in the README) when you want users to never see a localhost URL.
    */
   shell?: Shell;
+  /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
+  windowSize?: { width: number; height: number };
   /**
    * Abort to close the dev server early. The returned `closed` promise
    * resolves either way; if you need to distinguish a signal-driven close
@@ -266,6 +268,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     port: opts.port,
     openBrowser: opts.openBrowser,
     shell: opts.shell,
+    windowSize: opts.windowSize,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
     csp: opts.csp,

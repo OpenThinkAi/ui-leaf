@@ -354,6 +354,7 @@ async function runMount(): Promise<void> {
     port: config.port,
     openBrowser: config.openBrowser,
     shell: config.shell,
+    windowSize: config.windowSize,
     csp: config.csp,
     heartbeatTimeoutMs: config.heartbeatTimeoutMs,
     startupGraceMs: config.startupGraceMs,

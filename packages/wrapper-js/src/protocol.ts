@@ -79,6 +79,8 @@ export type InboundConfig = {
   port?: number;
   openBrowser?: boolean;
   shell?: "tab" | "app";
+  /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
+  windowSize?: { width: number; height: number };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;
@@ -162,6 +164,8 @@ export type SpawnConfig = {
   port?: number;
   openBrowser?: boolean;
   shell?: "tab" | "app";
+  /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
+  windowSize?: { width: number; height: number };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;
