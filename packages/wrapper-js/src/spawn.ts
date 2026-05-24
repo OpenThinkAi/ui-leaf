@@ -65,6 +65,11 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
   let killRequested = false;
   let terminated = false;
   let killTimer: NodeJS.Timeout | null = null;
+  // Last event-level error message seen on stdout (or a wrapper-synthesised
+  // one) before `ready` settled. Issue #58: when the binary dies before ready
+  // it emits the real cause as a `type:"error"` frame, but the generic exit
+  // rejection used to discard it. We retain it here and append it below.
+  let lastErrorMessage: string | null = null;
 
   // ---- Promises ----------------------------------------------------------
 
@@ -143,10 +148,12 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
     } catch {
       // Malformed line — surface as a synthetic error event so the caller
       // can log it. We don't crash the wrapper.
+      const message = `wrapper: malformed JSON line from binary: ${trimmed}`;
+      lastErrorMessage = message;
       eventHandler?.({
         version: PROTOCOL_VERSION,
         type: "error",
-        message: `wrapper: malformed JSON line from binary: ${trimmed}`,
+        message,
       });
       return;
     }
@@ -167,6 +174,17 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
 
     if (msg.type === "closed") {
       observedCloseReason = (msg as { reason: CloseReason }).reason;
+    }
+
+    // Issue #58: retain event-level error messages so a pre-ready exit can
+    // report the real cause. Mutate-response errors carry an `id` (they answer
+    // a specific request, not a startup fault) and are deliberately excluded.
+    if (
+      msg.type === "error" &&
+      (msg as { id?: unknown }).id === undefined &&
+      typeof (msg as { message?: unknown }).message === "string"
+    ) {
+      lastErrorMessage = (msg as { message: string }).message;
     }
 
     // disconnected / reconnected / closed / error / unknown — all flow to
@@ -227,9 +245,13 @@ export function spawnUiLeaf(config: SpawnConfig): SpawnedHandle {
     else reason = "unknown";
 
     if (!readySettled) {
+      // Issue #58: if the binary surfaced a cause before dying, lead with it
+      // and drop the opaque `reason=` token; otherwise keep the generic shape.
       rejectReady(
         new Error(
-          `ui-leaf: binary exited (code=${code}, reason=${reason}) before ready`,
+          lastErrorMessage !== null
+            ? `ui-leaf: binary exited (code=${code}) before ready: ${lastErrorMessage}`
+            : `ui-leaf: binary exited (code=${code}, reason=${reason}) before ready`,
         ),
       );
     }
