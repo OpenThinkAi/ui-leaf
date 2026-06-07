@@ -12,25 +12,25 @@ the **bring-your-own-view** part.
 
 ## Status
 
-`v1.0.0 — release in progress`. Binary architecture and stdio protocol are stable.
-JS wrapper API documentation lands with the publish-target swap (v1.0.0 final). The
-full design doc (`docs/design.md`) ships alongside the binary release.
+`v1.0 — stable`. The binary, the stdio protocol, and the JS wrapper API
+(`@openthink/ui-leaf`) are all stable. Non-JS wrappers (Python, Rust) are on
+the roadmap; today, non-Node callers drive the binary directly over stdio (see
+[Quickstart: non-JS callers](#quickstart-non-js-callers)).
 
-> **On v0.8.x?** The current npm-published package (`@openthink/ui-leaf@0.8.x`) is
-> the Node SDK with `mount()`, `dataLoader`, and `ViewProps` exports. Those APIs are
-> documented in the README bundled in the npm tarball — install any v0.8.x version
-> and read `node_modules/@openthink/ui-leaf/README.md`, or view it on
-> [npmjs.com/package/@openthink/ui-leaf](https://www.npmjs.com/package/@openthink/ui-leaf)
-> before v1.0.0 publishes. v1.0.0 replaces the SDK with a thin wrapper that spawns
-> the standalone binary.
+> **Upgrading from v0.8.x?** The pre-1.0 package (`@openthink/ui-leaf@0.8.x`)
+> was the Node SDK with `mount()`, `dataLoader`, and `ViewProps` exports. v1.0
+> replaced the SDK with a thin wrapper that spawns the standalone binary; the
+> `mount()` surface is similar but the inside is different. v0.8.x callers
+> needing the old API can pin `@openthink/ui-leaf@0.8` — that line is no
+> longer maintained.
 >
 > **Sensitive-data callers (PHI / PCI / financial records):** the v0.8.x SDK
-> exposes `dataLoader`, an in-memory alternative to `data` that serves the
+> exposed `dataLoader`, an in-memory alternative to `data` that served the
 > payload at a token-gated `/api/data` endpoint instead of inlining it into the
-> served HTML. v0.8.x users with that requirement should reach for `dataLoader`
-> as documented in the in-tarball README. The v1.0.0 binary's data-update
-> channel uses the same in-memory + token-gated posture as a default; explicit
-> dataLoader docs ship with v1.0.0.
+> served HTML. The v1.0 binary's data-update channel uses the same in-memory +
+> token-gated posture as a default — the `data` config field is delivered to
+> the browser only over the token-gated channel, never inlined into the served
+> HTML.
 
 ## Install
 
@@ -81,13 +81,13 @@ grep ui-leaf-darwin-arm64 checksums.txt | shasum -a 256 -c -  \
 # (chain with && so a checksum failure aborts the install)
 ```
 
-### JS wrapper (`npm install @openthink/ui-leaf`, v1.0.0)
+### JS wrapper (`npm install @openthink/ui-leaf`)
 
-With v1.0.0, `npm install @openthink/ui-leaf` will install the thin JS wrapper;
-`postinstall` downloads and verifies the right binary for your platform
-automatically (SHA256 against the release's `checksums.txt`). Full JS wrapper
-API documentation lands with the publish-target swap as part of the v1.0.0
-release.
+`npm install @openthink/ui-leaf` installs the thin JS wrapper; `postinstall`
+downloads and verifies the right binary for your platform automatically
+(SHA256 against the release's `checksums.txt`). API reference for the
+wrapper's `mount()` and `View` handle is in
+[JS wrapper API](#js-wrapper-api) below.
 
 ```bash
 npm install @openthink/ui-leaf
@@ -263,6 +263,138 @@ For the full field-by-field reference — including every message type, all opti
 - **Handling concurrent mutations.** Each pending mutation has a unique `id`. Multiple
   mutations can be in flight — match `result`/`error` responses to requests by `id`.
 
+## JS wrapper API
+
+The `@openthink/ui-leaf` package wraps the binary's stdio protocol in an
+ergonomic Node API. Install it with `npm install @openthink/ui-leaf` (no
+separate binary download — `postinstall` fetches and verifies the right one
+for your platform). Requires Node 22+.
+
+For non-Node callers, drive the binary directly over stdio
+([Quickstart: non-JS callers](#quickstart-non-js-callers)). The underlying
+wire protocol is documented in
+[`docs/ipc-protocol.md`](./docs/ipc-protocol.md) — the wrapper is a thin shim
+over it, so anything the wrapper does is reproducible from any language.
+
+### `mount(options)`
+
+```js
+import { mount } from "@openthink/ui-leaf";
+
+const view = await mount({
+  view: "dashboard",
+  viewsRoot: "/abs/path/to/views",
+  data: { items: [] },
+});
+```
+
+Spawns the `ui-leaf` binary, sends the config, and resolves with a `View`
+handle once the server is `ready`. Rejects if the binary exits before ready
+(missing view file, bad config, port unavailable after auto-bump, etc.) —
+the rejection's `cause` carries the binary's exit reason.
+
+### `MountOptions`
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `view` | `string` | _required_ | View name (resolved against `viewsRoot`) — typically the basename of a `.tsx` file under `viewsRoot/`. |
+| `viewsRoot` | `string` | _required_ | **Absolute** path to the directory holding view `.tsx` files. |
+| `data` | `unknown` | `undefined` | Initial data props for the view. Delivered to the browser over the token-gated channel — never inlined into the served HTML. |
+| `mutations` | `Record<string, (args) => Promise<unknown>>` | `{}` | Map of named mutation handlers the view is allowed to call. Keys are declared to the binary as the allowed-mutation list; unknown names return 404. |
+| `title` | `string` | `"ui-leaf"` | Browser tab title. |
+| `port` | `number` | `5810` | TCP port to bind. Auto-bumps if busy; the bound port is reflected on `view.port`/`view.url`. Pass `0` to let the OS pick. |
+| `openBrowser` | `boolean` | `true` | Open the browser when ready. Set `false` for headless / smoke-test use; the URL is still available on `view.url`. |
+| `shell` | `"tab"` \| `"app"` | `"tab"` | `"tab"` opens in the user's default browser. `"app"` tries Chromium's `--app` mode (Chrome / Edge / Brave) for a chromeless window; falls back to `"tab"` on Safari, Firefox, or if no Chromium is installed. |
+| `windowSize` | `{ width: number; height: number }` | _none_ | Initial Chrome window size in CSS pixels for `shell: "app"`. Ignored in `"tab"` mode. |
+| `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
+| `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |
+| `heartbeatTimeoutMs` | `number` | `5000` | Browser silence (ms) after which `disconnected` fires. Does **not** terminate the mount — only signals. |
+| `startupGraceMs` | `number` | `30000` | Grace period (ms) after server start before the heartbeat watcher arms. |
+| `signal` | `AbortSignal` | _none_ | Pre-ready abort kills the child; post-ready sends `close` then `SIGKILL` after 5s. The `closed` promise still resolves; check `signal.aborted` to distinguish. |
+| `silent` | `boolean` | `false` | Suppress the binary's stderr forwarding to the parent process. Useful when stdout is reserved for a structured protocol. |
+| `binaryPath` | `string` | _postinstall-resolved_ | Override the binary path (e.g. a local dev build, or to pin a specific download). Power-user escape hatch. |
+
+### `View` handle
+
+The object resolved by `mount()` is a live handle on the running mount.
+
+| Member | Type | Description |
+|---|---|---|
+| `url` | `string` | Full URL including the `#token=…` fragment. |
+| `id` | `string` | Wrapper-synthetic per-spawn UUID. |
+| `port` | `number` | TCP port the server bound to (may differ from the requested port if it auto-bumped). |
+| `update({ data })` | `Promise<void>` | Replace the view's `data` props and push a data-updated SSE event to connected browsers. Fire-and-forget (resolves immediately). |
+| `setView(source)` | `Promise<void>` | Hot-swap the view source. `source` is **raw TSX** (a code string), not the `view` name. Resolves on the next `view-swapped` event; rejects on build error. (Alias for `setSource(source)`, retained for v1.0.x compatibility.) |
+| `patch({ data?, source? })` | `Promise<void>` | Atomic data + view swap. Sends the narrowest wire message for the fields supplied: both → `patch`, source only → `view`, data only → `update`, neither → no-op. |
+| `reopen()` | `void` | Re-invoke `open(url)` to launch a fresh browser tab (e.g. after the user closes one). |
+| `onDisconnect(handler)` | `void` | Register a handler fired when the browser tab disconnects. May fire multiple times if `reopen()` is used. |
+| `onReconnect(handler)` | `void` | Register a handler fired when the browser tab reconnects. |
+| `onError(handler)` | `void` | Register a handler for structured error events (`{ phase?, message }`). Build errors are non-fatal; runtime errors are fatal and precede `closed`. |
+| `closed` | `Promise<{ reason: string }>` | Resolves when the binary closes, never rejects. `reason` is one of `"caller"` \| `"signal"` \| `"error"`. |
+| `close()` | `Promise<void>` | Send `{type:"close"}` and await the `closed` event. Idempotent. |
+
+### Worked example: spend tracker
+
+A two-mutation example — render a list of transactions, let the user
+recategorize one, push the recomputed totals back to the view:
+
+```js
+import { mount } from "@openthink/ui-leaf";
+
+// Imagine these are loaded from your CLI's data source.
+let transactions = [
+  { id: "t1", date: "2026-06-01", merchant: "Blue Bottle",     amount:  6.50, category: "uncategorized" },
+  { id: "t2", date: "2026-06-02", merchant: "Whole Foods",     amount: 84.20, category: "groceries" },
+  { id: "t3", date: "2026-06-03", merchant: "Shell",           amount: 42.10, category: "uncategorized" },
+];
+
+function totalsByCategory(rows) {
+  return rows.reduce((acc, r) => {
+    acc[r.category] = (acc[r.category] ?? 0) + r.amount;
+    return acc;
+  }, {});
+}
+
+const view = await mount({
+  view: "spend",
+  viewsRoot: "/abs/path/to/views",
+  title: "Spend",
+  data: {
+    items: transactions,
+    totals: totalsByCategory(transactions),
+  },
+  mutations: {
+    // View calls: mutate("recategorize", { id, category })
+    recategorize: async ({ id, category }) => {
+      const row = transactions.find((t) => t.id === id);
+      if (!row) throw new Error(`unknown transaction: ${id}`);
+      row.category = category;
+      // Push the recomputed view-state back to the browser.
+      await view.update({
+        data: {
+          items: transactions,
+          totals: totalsByCategory(transactions),
+        },
+      });
+      return { ok: true };
+    },
+  },
+});
+
+console.error(`spend view ready at ${view.url}`);
+
+// Optional: auto-reopen if the user closes the tab.
+view.onDisconnect(() => view.reopen());
+
+// Block until the mount closes (user calls view.close(), parent gets SIGTERM,
+// or a runtime error fires).
+const { reason } = await view.closed;
+console.error(`spend view closed (${reason})`);
+```
+
+For a runnable counter example using the same wrapper API, see
+[`examples/node/counter.js`](./examples/node/counter.js).
+
 ## Architecture: the broker principle
 
 `ui-leaf` enforces a hard separation between the view and the consumer's backend:
@@ -419,11 +551,14 @@ The consumer CLI is responsible for (out of ui-leaf's scope):
 
 ## Further reading
 
+- [`docs/ipc-protocol.md`](./docs/ipc-protocol.md) — human-readable reference
+  for the stdio wire protocol (every message type, all optional fields, SSE
+  event payloads).
 - [`packages/cli/schema/ipc.json`](./packages/cli/schema/ipc.json) — the IPC
-  schema (JSON Schema 2020-12). Source of truth for the wire protocol. A
-  human-readable doc generated from this schema (`docs/ipc-protocol.md`) and a
-  fuller architecture deep-dive (`docs/design.md`) ship as part of the v1.0.0
-  release.
+  schema (JSON Schema 2020-12). Source of truth for the wire protocol; the
+  human-readable doc above is generated from it.
+- [JS wrapper API](#js-wrapper-api) — `mount()`, `MountOptions`, and the
+  `View` handle reference for `@openthink/ui-leaf`.
 - [examples/bash/counter.sh](./examples/bash/counter.sh) — Bash example with
   mutation round-trip (jq preferred; sed fallback for zero-dependency environments).
 - [examples/python/counter.py](./examples/python/counter.py) — Python asyncio
