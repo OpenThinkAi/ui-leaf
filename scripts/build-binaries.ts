@@ -23,7 +23,32 @@ const TARGETS: readonly Target[] = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO_ROOT, "packages/cli/src/cli.ts");
-const DIST_DIR = join(REPO_ROOT, "dist");
+const DEFAULT_DIST_DIR = join(REPO_ROOT, "dist");
+
+/**
+ * Resolve the output directory for binaries (and checksums.txt).
+ *
+ * Precedence: `--out <dir>` CLI flag > `UI_LEAF_DIST_DIR` env > default `dist/`
+ * at the repo root. The override is used by `scripts/smoke-presubmit.ts`
+ * (AGT-202) so the pre-merge smoke check can write a host-only binary to a
+ * tempdir without clobbering the developer's existing `dist/` artifacts.
+ *
+ * Relative paths are resolved against the current working directory at call
+ * time — callers passing tempdirs should already be absolute.
+ */
+function resolveDistDir(argv: readonly string[]): string {
+  const flagIdx = argv.indexOf("--out");
+  if (flagIdx !== -1) {
+    const value = argv[flagIdx + 1];
+    if (!value) {
+      throw new Error("--out requires a directory path, e.g. --out /tmp/ui-leaf-build");
+    }
+    return resolve(value);
+  }
+  const envValue = process.env.UI_LEAF_DIST_DIR;
+  if (envValue && envValue.length > 0) return resolve(envValue);
+  return DEFAULT_DIST_DIR;
+}
 
 // Read the published version from wrapper-js's package.json so that
 // `ui-leaf --version` reports the correct number. The cli.ts handler reads
@@ -70,8 +95,8 @@ function parseTargetsFlag(argv: readonly string[]): readonly Target[] {
   return selected;
 }
 
-function buildOne(target: Target, version: string): Promise<BuildOutcome> {
-  const outfile = join(DIST_DIR, target.filename);
+function buildOne(target: Target, version: string, distDir: string): Promise<BuildOutcome> {
+  const outfile = join(distDir, target.filename);
   const args = [
     "build",
     "--compile",
@@ -136,15 +161,15 @@ function hashFile(path: string): Promise<string> {
   });
 }
 
-async function writeChecksums(): Promise<void> {
-  const entries = await readdir(DIST_DIR);
+async function writeChecksums(distDir: string): Promise<void> {
+  const entries = await readdir(distDir);
   const binaries = entries.filter((name) => name.startsWith("ui-leaf-")).sort();
   const lines: string[] = [];
   for (const name of binaries) {
-    const digest = await hashFile(join(DIST_DIR, name));
+    const digest = await hashFile(join(distDir, name));
     lines.push(`${digest}  ${name}`);
   }
-  await writeFile(join(DIST_DIR, "checksums.txt"), `${lines.join("\n")}\n`, "utf8");
+  await writeFile(join(distDir, "checksums.txt"), `${lines.join("\n")}\n`, "utf8");
 }
 
 function formatDuration(ms: number): string {
@@ -176,19 +201,20 @@ async function spawnPrebundle(): Promise<void> {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const selected = parseTargetsFlag(argv);
+  const distDir = resolveDistDir(argv);
 
   await spawnPrebundle();
 
   const publishedVersion = await readPublishedVersion();
 
-  await rm(DIST_DIR, { recursive: true, force: true });
-  await mkdir(DIST_DIR, { recursive: true });
+  await rm(distDir, { recursive: true, force: true });
+  await mkdir(distDir, { recursive: true });
 
-  console.log(`Building ${selected.length} target(s) at v${publishedVersion} → ${DIST_DIR}`);
+  console.log(`Building ${selected.length} target(s) at v${publishedVersion} → ${distDir}`);
   const outcomes: BuildOutcome[] = [];
   for (const target of selected) {
     process.stdout.write(`  ${target.id} … `);
-    const outcome = await buildOne(target, publishedVersion);
+    const outcome = await buildOne(target, publishedVersion, distDir);
     outcomes.push(outcome);
     if (outcome.ok) {
       console.log(`ok (${formatDuration(outcome.durationMs)}, ${formatSize(outcome.sizeBytes)})`);
@@ -204,8 +230,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  await writeChecksums();
-  console.log(`\nAll ${outcomes.length} build(s) succeeded. Checksums: ${join(DIST_DIR, "checksums.txt")}`);
+  await writeChecksums(distDir);
+  console.log(`\nAll ${outcomes.length} build(s) succeeded. Checksums: ${join(distDir, "checksums.txt")}`);
 }
 
 await main();

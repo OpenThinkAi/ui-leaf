@@ -1,5 +1,11 @@
 name: Smoke test
 
+# Defense-in-depth post-publish smoke (AGT-202): the primary smoke signal is
+# now the `smoke` required_check in `.stamp/config.yml`, which runs pre-merge
+# against the host-platform binary built from the PR branch's tree. This
+# workflow is retained for cross-platform matrix coverage (5 OS/arch combos)
+# and to exercise the real npm install + postinstall + GH Releases path.
+#
 # Triggered manually after a prerelease publishes to GH Releases + npm.
 # Runs on all five supported platforms; validates the binary, the JS wrapper
 # postinstall, and a headless mount round-trip via stdin IPC (no token needed).

@@ -4,6 +4,16 @@ branches:
       - security
       - standards
       - product
+    # required_checks run at `stamp merge` time against the merged tree (post-
+    # merge) and roll the merge back if any non-zero. The set covers:
+    #   typecheck — `tsc --noEmit` on the CLI package
+    #   build     — root `bun run build` (pre-bundles React for the binary embed)
+    #   test      — `bun test` across all workspaces
+    #   smoke     — pre-merge binary+wrapper round-trip (AGT-202). Builds the
+    #               host-platform binary into a tempdir, drives stdin-IPC mount
+    #               and wrapper-via-source round-trips. Host-only; the post-
+    #               publish `.github/workflows/smoke.yml` matrix keeps the
+    #               cross-platform coverage as defense-in-depth.
     required_checks:
       - name: typecheck
         run: bun run typecheck
@@ -11,6 +21,8 @@ branches:
         run: bun run build
       - name: test
         run: bun test
+      - name: smoke
+        run: bun run scripts/smoke-presubmit.ts
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md

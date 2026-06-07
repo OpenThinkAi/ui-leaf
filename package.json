@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p packages/cli/tsconfig.src.json",
     "test": "bun test",
     "smoke:examples": "bun run scripts/smoke-examples.ts",
+    "smoke:presubmit": "bun run scripts/smoke-presubmit.ts",
     "generate:protocol-doc": "bun run scripts/generate-protocol-doc.ts",
     "check:protocol-doc": "bun run scripts/generate-protocol-doc.ts check"
   },

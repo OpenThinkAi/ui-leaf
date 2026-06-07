@@ -46,6 +46,29 @@ The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` +
 `publish.yml`; renaming the workflow file requires reconfiguring the
 binding at <https://www.npmjs.com/package/@openthink/ui-leaf/access>.
 
+## Quality gates
+
+`.stamp/config.yml` declares the `required_checks` that `stamp merge` runs
+against the merged tree before the signed merge commit lands on `main`.
+Any non-zero exit rolls the merge back. The set is:
+
+- `typecheck` — `tsc --noEmit` on the CLI package
+- `build` — pre-bundle React for the binary embed
+- `test` — `bun test` across all workspaces
+- `smoke` — pre-merge binary + wrapper round-trip (AGT-202). Builds the
+  host-platform binary into a tempdir via `scripts/build-binaries.ts --out`,
+  drives a stdin-IPC `mount → update → close` round-trip against the binary,
+  then a wrapper round-trip importing `packages/wrapper-js/src/` directly
+  with `mount({ binaryPath })` pointed at the just-built binary. Scope is
+  host-platform only; cross-platform coverage stays in the post-publish
+  `.github/workflows/smoke.yml` as defense-in-depth. The check early-skips
+  when the diff touches none of the binary/wrapper/view surface
+  (`packages/cli/`, `packages/wrapper-js/src/`, the build scripts, `views/`,
+  workspace metadata).
+
+Locally invoke the smoke check with `bun run smoke:presubmit` (~30–60s on
+M-series hardware).
+
 ## Dependency updates
 
 Bot-opened PRs from Dependabot, Renovate, Snyk, and similar GitHub-side
