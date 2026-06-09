@@ -107,20 +107,26 @@ const LINUX_CHROMIUM_COMMANDS = [
   "brave-browser",
 ];
 
-async function resolveOnPath(command: string): Promise<string | null> {
+async function resolveOnPath(
+  command: string,
+  accessImpl: typeof access,
+): Promise<string | null> {
   const pathEnv = process.env.PATH;
   if (!pathEnv) return null;
   for (const dir of pathEnv.split(delimiter)) {
     if (!dir) continue;
     const candidate = join(dir, command);
-    if (await isExecutable(candidate)) return candidate;
+    if (await isExecutable(candidate, accessImpl)) return candidate;
   }
   return null;
 }
 
-async function isExecutable(path: string): Promise<boolean> {
+async function isExecutable(
+  path: string,
+  accessImpl: typeof access,
+): Promise<boolean> {
   try {
-    await access(path, fsConstants.X_OK);
+    await accessImpl(path, fsConstants.X_OK);
     return true;
   } catch {
     return false;
@@ -252,7 +258,9 @@ export function buildAppModeArgs(
 
 async function openInAppMode(
   url: string,
-  windowSize?: { width: number; height: number },
+  windowSize: { width: number; height: number } | undefined,
+  spawnImpl: typeof spawn,
+  fsAccessImpl: typeof access,
 ): Promise<ChildProcess | null> {
   // Defensive: openUrl is server-constructed today (http://127.0.0.1:port/
   // #token=...), but a future refactor could change that. Reject anything
@@ -281,21 +289,21 @@ async function openInAppMode(
   let binPath: string | null = null;
   if (process.platform === "darwin") {
     for (const p of MACOS_CHROMIUM_BINARIES) {
-      if (await isExecutable(p)) {
+      if (await isExecutable(p, fsAccessImpl)) {
         binPath = p;
         break;
       }
     }
   } else if (process.platform === "win32") {
     for (const p of windowsChromiumBinaries()) {
-      if (await isExecutable(p)) {
+      if (await isExecutable(p, fsAccessImpl)) {
         binPath = p;
         break;
       }
     }
   } else {
     for (const cmd of LINUX_CHROMIUM_COMMANDS) {
-      const resolved = await resolveOnPath(cmd);
+      const resolved = await resolveOnPath(cmd, fsAccessImpl);
       if (resolved) {
         binPath = resolved;
         break;
@@ -312,7 +320,7 @@ async function openInAppMode(
     // detached + own session/process group so cleanup() can signal the
     // whole tree (helper processes included). Windows ignores `detached`
     // for SIGTERM purposes — cleanup() uses `taskkill /T` there.
-    const child = spawn(binPath, launchArgs, {
+    const child = spawnImpl(binPath, launchArgs, {
       detached: true,
       stdio: "ignore",
     });
@@ -342,7 +350,7 @@ async function openInAppMode(
  * shutdown, or an unrecoverable server error — all of which route
  * through cleanup().
  */
-function killChromeTree(child: ChildProcess): void {
+function killChromeTree(child: ChildProcess, spawnImpl: typeof spawn): void {
   // `killed` flips after a successful signal; once set, further signals
   // are no-ops. Don't gate on `exitCode != null` — on detached children
   // we may not have received the exit event yet at cleanup time.
@@ -355,7 +363,7 @@ function killChromeTree(child: ChildProcess): void {
     // spawns helper processes (renderer/gpu/utility) that would otherwise
     // outlive the parent. `taskkill /T /F` kills the tree forcefully.
     try {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      const killer = spawnImpl("taskkill", ["/pid", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
       });
@@ -525,6 +533,20 @@ export interface DevServerOptions {
    * Never set this in production; use `openBrowser: false` instead.
    */
   _opener?: (url: string) => Promise<void>;
+  /**
+   * Test seam: replace `spawn` from `node:child_process`. When provided,
+   * used instead of the module-level `spawn` for all child spawns inside
+   * `openInAppMode` (chromium launch) and `killChromeTree` (taskkill path).
+   * Never set this in production.
+   */
+  _spawn?: typeof spawn;
+  /**
+   * Test seam: replace `fs.access` from `node:fs/promises`. When provided,
+   * used instead of the module-level `access` for all binary-discovery
+   * probes inside `openInAppMode`.
+   * Never set this in production.
+   */
+  _fsAccess?: typeof access;
 }
 
 export type { CloseReason };
@@ -592,6 +614,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     silent = false,
     _opener,
     _heartbeatCheckIntervalMs = 1000,
+    _spawn: spawnImpl = spawn,
+    _fsAccess: fsAccessImpl = access,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -825,7 +849,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       // so the window closes promptly even if the graceful HTTP shutdown
       // is slow (or stuck on a hung in-flight request).
       for (const child of trackedAppWindows) {
-        killChromeTree(child);
+        killChromeTree(child, spawnImpl);
       }
       trackedAppWindows.clear();
       // Graceful stop: waits for in-flight writes (including the closing SSE
@@ -896,7 +920,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
-            const child = await openInAppMode(openUrl, windowSize);
+            const child = await openInAppMode(openUrl, windowSize, spawnImpl, fsAccessImpl);
             if (child) {
               trackedAppWindows.add(child);
               // Drop the entry when Chrome exits on its own (user closed
