@@ -10,8 +10,12 @@
 // dropped (#55) AND so we have a real PID to track for cleanup on
 // unmount (the Windows orphan fix).
 //
-// The test mocks `node:child_process.spawn` on every platform plus the
-// fs.access probe that gates binary discovery, then asserts:
+// The test injects fake `spawn` and `access` implementations via the
+// `_spawn` / `_fsAccess` test seams on DevServerOptions (matching the
+// existing `_opener` convention). No process-global module mocks are
+// installed, so nothing leaks to other files in the same Bun worker.
+//
+// Assertions:
 //   - the silenced 'error' listener is attached + child is unref'd (#54)
 //   - `--app=`, `--user-data-dir=`, and `--disable-background-mode` are
 //     in the launch args
@@ -23,7 +27,7 @@
 // broader "mount survives stray unauth traffic" behaviour via the
 // `_opener` test seam (bypassing openInAppMode entirely).
 
-import { describe, test, expect, afterEach, mock } from "bun:test";
+import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 
@@ -46,7 +50,7 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
-// Captured by the spawn mock.
+// Captured by the fake spawn.
 const childRef: { current: FakeChildProcess | null } = { current: null };
 const spawnLog: Array<{ command: string; args: readonly string[] }> = [];
 // Captured taskkill calls on Windows (cleanup path).
@@ -54,39 +58,33 @@ const taskkillLog: Array<readonly string[]> = [];
 // Captured process.kill(pid, signal) calls (POSIX cleanup path).
 const processKillLog: Array<{ pid: number; signal: string | number | undefined }> = [];
 
-// Pretend whichever binary the platform's discovery loop probes first
-// exists. macOS uses bundle paths; Windows uses `Program Files`; Linux
-// walks PATH.
-mock.module("node:fs/promises", () => {
-  const real = require("node:fs/promises") as typeof import("node:fs/promises");
-  const access = async (path: unknown, _mode?: unknown): Promise<void> => {
-    if (typeof path !== "string") throw new Error("ENOENT (test-mocked)");
-    if (IS_DARWIN && path.includes("Google Chrome.app")) return;
-    if (IS_WIN && path.toLowerCase().endsWith("chrome.exe")) return;
-    if (!IS_DARWIN && !IS_WIN && path.endsWith("/google-chrome")) return;
-    throw new Error("ENOENT (test-mocked)");
-  };
-  return { ...real, default: { ...real, access }, access };
-});
+// Fake fs.access: pretend whichever binary the platform's discovery loop
+// probes first exists. macOS uses bundle paths; Windows uses Program Files;
+// Linux walks PATH. Injected via _fsAccess — no process-global mock.
+const fakeAccess = async (path: unknown, _mode?: unknown): Promise<void> => {
+  if (typeof path !== "string") throw new Error("ENOENT (test-mocked)");
+  if (IS_DARWIN && path.includes("Google Chrome.app")) return;
+  if (IS_WIN && path.toLowerCase().endsWith("chrome.exe")) return;
+  if (!IS_DARWIN && !IS_WIN && path.endsWith("/google-chrome")) return;
+  throw new Error("ENOENT (test-mocked)");
+};
 
-mock.module("node:child_process", () => {
-  const real = require("node:child_process") as typeof import("node:child_process");
-  const fakeSpawn = ((command: string, args: readonly string[]) => {
-    if (command === "taskkill") {
-      taskkillLog.push([...args]);
-      // taskkill child also needs to be an EventEmitter (the code attaches
-      // an 'error' listener and calls unref()). It does NOT need to be the
-      // childRef captured — that one is the tracked Chrome process.
-      const tk = new FakeChildProcess();
-      return tk as unknown as ReturnType<typeof real.spawn>;
-    }
-    spawnLog.push({ command, args: [...args] });
-    const child = makeFakeChildEmittingError(command);
-    childRef.current = child;
-    return child as unknown as ReturnType<typeof real.spawn>;
-  }) as unknown as typeof real.spawn;
-  return { ...real, default: { ...real, spawn: fakeSpawn }, spawn: fakeSpawn };
-});
+// Fake spawn: intercepts Chromium launch and taskkill calls.
+// Injected via _spawn — no process-global mock.
+const fakeSpawn = ((command: string, args: readonly string[]) => {
+  if (command === "taskkill") {
+    taskkillLog.push([...args]);
+    // taskkill child also needs to be an EventEmitter (the code attaches
+    // an 'error' listener and calls unref()). It does NOT need to be the
+    // childRef captured — that one is the tracked Chrome process.
+    const tk = new FakeChildProcess();
+    return tk as unknown as ReturnType<typeof import("node:child_process").spawn>;
+  }
+  spawnLog.push({ command, args: [...args] });
+  const child = makeFakeChildEmittingError(command);
+  childRef.current = child;
+  return child as unknown as ReturnType<typeof import("node:child_process").spawn>;
+}) as unknown as typeof import("node:child_process").spawn;
 
 function makeFakeChildEmittingError(label: string): FakeChildProcess {
   const child = new FakeChildProcess();
@@ -103,20 +101,25 @@ function makeFakeChildEmittingError(label: string): FakeChildProcess {
   return child;
 }
 
-// Patch process.kill once — restored in afterEach to a no-op. The real
-// process.kill would target the test runner's own PID (or a sibling),
-// which we obviously don't want during a cleanup() test.
+// Saved real process.kill so we can restore it after each test. The patch
+// is applied fresh in beforeEach so it's always active during the test body
+// (including srv.close()) and restored in afterEach so subsequent tests and
+// files see the real implementation.
 const ORIGINAL_PROCESS_KILL = process.kill.bind(process);
-process.kill = ((pid: number, signal?: string | number) => {
-  processKillLog.push({ pid, signal });
-  return true;
-}) as typeof process.kill;
 
-// Dynamic import after mocks so server.ts evaluates with them in place.
 const { startDevServer } = await import("../src/server.ts");
 type Srv = Awaited<ReturnType<typeof startDevServer>>;
 
 let server: Srv | null = null;
+
+beforeEach(() => {
+  // (Re-)apply the process.kill patch before each test so the stub is always
+  // in place for the test body (including any srv.close() calls within it).
+  process.kill = ((pid: number, signal?: string | number) => {
+    processKillLog.push({ pid, signal });
+    return true;
+  }) as typeof process.kill;
+});
 
 afterEach(async () => {
   if (server) {
@@ -127,12 +130,8 @@ afterEach(async () => {
   spawnLog.length = 0;
   taskkillLog.length = 0;
   processKillLog.length = 0;
-});
-
-// Restore process.kill at module teardown so subsequent test files run
-// against the real one. bun:test doesn't expose afterAll for module
-// scope here; the import-time monkeypatch survives only this file.
-process.on("beforeExit", () => {
+  // Restore process.kill after each test so subsequent tests (and files in
+  // the same Bun worker) see the real implementation — no leak.
   process.kill = ORIGINAL_PROCESS_KILL;
 });
 
@@ -150,6 +149,8 @@ describe("openInAppMode resilience + launch-args contract", () => {
         heartbeatTimeoutMs: 75_000,
         startupGraceMs: 0,
         silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
       });
 
       await new Promise((r) => setImmediate(r));
@@ -181,6 +182,8 @@ describe("openInAppMode resilience + launch-args contract", () => {
         heartbeatTimeoutMs: 75_000,
         startupGraceMs: 0,
         silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
       });
 
       await new Promise((r) => setImmediate(r));
@@ -230,6 +233,8 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
         heartbeatTimeoutMs: 75_000,
         startupGraceMs: 0,
         silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
       });
 
       await new Promise((r) => setImmediate(r));
@@ -277,6 +282,8 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
         startupGraceMs: 0,
         _heartbeatCheckIntervalMs: 10,
         silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
       });
 
       await new Promise((r) => setImmediate(r));
