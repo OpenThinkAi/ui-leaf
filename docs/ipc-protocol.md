@@ -76,6 +76,7 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `port` | integer |  | TCP port to bind. 0 = OS-assigned. | min: 0, max: 65535 |
 | `openBrowser` | boolean |  | Whether to open a browser tab automatically on startup. | — |
 | `shell` | `"tab"` \| `"app"` |  | macOS open-in shell mode. | — |
+| `profile` | object `{ dir }` |  | Opt-in persistent browser profile for `shell:"app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Ignored in tab mode. | `dir` is a non-empty string |
 | `csp` | string |  | Content Security Policy preset name or raw policy string. | — |
 | `heartbeatTimeoutMs` | integer |  | Milliseconds before a missing browser heartbeat closes the mount. Default: 5000. | min: 0 |
 | `startupGraceMs` | integer |  | Milliseconds to wait for a first browser connection before emitting disconnected. | min: 0 |

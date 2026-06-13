@@ -81,6 +81,8 @@ export type InboundConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
+  profile?: { dir: string };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;
@@ -166,6 +168,8 @@ export type SpawnConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
+  profile?: { dir: string };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;

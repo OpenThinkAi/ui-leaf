@@ -29,6 +29,9 @@
 
 import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const VIEWS_ROOT = join(import.meta.dir, "fixtures/views");
@@ -317,6 +320,82 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
       const res = await fetch(`${server!.url}/`);
       await res.body?.cancel().catch(() => { });
       expect(res.status).toBe(200);
+    },
+    30_000,
+  );
+});
+
+describe("persistent profile (ui-leaf#63)", () => {
+  // Unique per-run dir under tmpdir; created by the launch path, asserted to
+  // survive unmount, then removed by the test (it's caller-owned, so ui-leaf
+  // never cleans it up — that's the whole point of the feature).
+  const profileDir = join(
+    tmpdir(),
+    `ui-leaf-test-profile-${process.pid}-${Date.now()}`,
+  );
+
+  afterEach(async () => {
+    await rm(profileDir, { recursive: true, force: true });
+  });
+
+  test(
+    "uses the caller's profile dir as --user-data-dir and creates it on first use",
+    async () => {
+      expect(existsSync(profileDir)).toBe(false);
+
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        profile: { dir: profileDir },
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
+      });
+
+      await new Promise((r) => setImmediate(r));
+
+      // The persistent dir is passed verbatim — NOT an mkdtemp temp dir.
+      expect(spawnLog).toHaveLength(1);
+      expect(spawnLog[0]!.args).toContain(`--user-data-dir=${profileDir}`);
+      // Created on first use so a fresh path works.
+      expect(existsSync(profileDir)).toBe(true);
+    },
+    30_000,
+  );
+
+  test(
+    "does NOT delete the profile dir on unmount (session persists across launches)",
+    async () => {
+      const srv = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        profile: { dir: profileDir },
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
+      });
+
+      await new Promise((r) => setImmediate(r));
+      expect(existsSync(profileDir)).toBe(true);
+
+      await srv.close();
+      server = null;
+
+      // The whole point of #63: the profile survives unmount so a re-launch
+      // reuses the same logged-in session.
+      expect(existsSync(profileDir)).toBe(true);
     },
     30_000,
   );

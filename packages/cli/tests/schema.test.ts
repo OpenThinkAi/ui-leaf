@@ -240,6 +240,33 @@ describe("(d) malformed inbound messages fail validation", () => {
     if (!r.ok) expect(r.reason).toContain("shell");
   });
 
+  test("config: profile without a dir (ui-leaf#63)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", profile: {} },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("profile");
+  });
+
+  test("config: profile.dir is not a string (ui-leaf#63)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", profile: { dir: 42 } },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("profile");
+  });
+
+  test("config: profile.dir is empty (ui-leaf#63)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", profile: { dir: "" } },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("profile");
+  });
+
   // Post-config mutation responses
   test("result: missing id", () => {
     const r = validateInboundShape({ version: "1", type: "result" }, "post-config");
@@ -337,6 +364,7 @@ describe("validateInboundShape — valid messages pass", () => {
           csp: "strict",
           heartbeatTimeoutMs: 5000,
           startupGraceMs: 2000,
+          profile: { dir: "/tmp/ui-leaf-profile" },
         },
         "config",
       ).ok,

@@ -50,6 +50,19 @@
           "enum": ["tab", "app"],
           "description": "macOS open-in shell mode."
         },
+        "profile": {
+          "type": "object",
+          "required": ["dir"],
+          "properties": {
+            "dir": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to a persistent Chrome --user-data-dir. Created on first use, never deleted on unmount. A relative path resolves against the binary's working directory at spawn time — pass an absolute path to avoid surprises."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Opt-in persistent browser profile for shell:\"app\". Without it each mount uses a throwaway temp profile discarded on unmount, so login-gated views re-authenticate every launch. Ignored in tab mode."
+        },
         "csp": {
           "type": "string",
           "description": "Content Security Policy preset name or raw policy string."

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import open from "open";
@@ -180,12 +180,24 @@ function attachLauncherErrorListener(
  *   - Linux: same PID-tracking concern as Windows; the `open` path
  *     usually goes via `xdg-open` and we lose the browser PID.
  *
- * **Per-mount user-data-dir.** Each launch gets a fresh temp profile.
- * That bypasses the single-instance lock so the spawn is a brand new
- * Chrome process (not a tab/window in an existing user session), and it
- * means "last window of this profile closes" reliably tears the process
+ * **Per-mount user-data-dir.** By default each launch gets a fresh temp
+ * profile. That bypasses the single-instance lock so the spawn is a brand
+ * new Chrome process (not a tab/window in an existing user session), and
+ * it means "last window of this profile closes" reliably tears the process
  * down — no inheriting the user's "continue background apps when Chrome
  * is closed" setting.
+ *
+ * **Opt-in persistent profile** (ui-leaf#63): when `profileDir` is set the
+ * launch uses that directory as `--user-data-dir` instead of a temp dir,
+ * and it is never deleted on unmount — so login-gated views (DRM
+ * streaming, SSO dashboards) keep their session across launches. The dir
+ * (and parents) is created on first use. Persistence is the only
+ * difference: direct-spawn and `--app=` still apply, so the chromeless
+ * window behaves identically. Caveat: a persistent dir is a named profile,
+ * so two concurrent mounts pointed at the same dir hit Chrome's
+ * single-instance lock — the second hands off to the first's process
+ * rather than spawning its own. Use distinct dirs (or sequential mounts)
+ * to keep app windows isolated.
  *
  * **--disable-background-mode** is passed as belt-and-suspenders on top
  * of the fresh profile: it disables Chrome's background-mode behaviour
@@ -209,8 +221,9 @@ function attachLauncherErrorListener(
  * cleanup() kills the Chrome tree we can't safely remove a directory
  * Chrome may still be flushing to. The OS reaps tmpdir periodically.
  * When this function returns null (no Chromium found), the just-created
- * dir is removed before returning so a caller-side fallback to a
- * default-browser tab doesn't leak an empty profile.
+ * temp dir is removed before returning so a caller-side fallback to a
+ * default-browser tab doesn't leak an empty profile. A persistent
+ * `profileDir` is never removed on either path — it is caller-owned.
  */
 /**
  * Build the Chromium `--app` launch argv. Extracted so the argv is
@@ -259,6 +272,7 @@ export function buildAppModeArgs(
 async function openInAppMode(
   url: string,
   windowSize: { width: number; height: number } | undefined,
+  profileDir: string | undefined,
   spawnImpl: typeof spawn,
   fsAccessImpl: typeof access,
 ): Promise<ChildProcess | null> {
@@ -268,14 +282,42 @@ async function openInAppMode(
   // be smuggled into a chromeless window (no URL bar to warn the user).
   if (!/^https?:\/\//i.test(url)) return null;
 
-  // Each mount gets its own --user-data-dir so Chrome opens a separate
-  // process and the chromeless window stays isolated from the user's
-  // primary session. See docstring for the full rationale.
-  const userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
+  // Resolve the --user-data-dir. Default: a throwaway temp profile per
+  // mount (separate Chrome process, isolated from the user's session,
+  // clean teardown). Opt-in (ui-leaf#63): a caller-supplied persistent
+  // dir, used verbatim and never deleted, so login-gated views keep their
+  // session across launches. See docstring for the full rationale.
+  const persistent = profileDir !== undefined;
+  let userDataDir: string;
+  if (profileDir !== undefined) {
+    userDataDir = profileDir;
+    try {
+      // Create the profile dir (and parents) so a fresh path works on the
+      // first launch. Idempotent when it already exists.
+      await mkdir(userDataDir, { recursive: true });
+    } catch (err) {
+      // The caller explicitly asked for persistence and we can't honour it
+      // (bad path, permission denied, path is a file). Don't crash the host —
+      // returning null falls back to a default-browser tab. Unlike the silent
+      // Chrome-not-found fallback (an environmental condition), a bad
+      // profile.dir is a caller mistake that silently downgrades intent, so
+      // always surface it on stderr rather than swallowing it.
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `ui-leaf: could not create persistent profile dir '${userDataDir}': ${msg}. Falling back to a default-browser tab; the session will not persist.\n`,
+      );
+      return null;
+    }
+  } else {
+    userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
+  }
   const launchArgs = buildAppModeArgs(url, userDataDir, windowSize);
 
-  // Helper: remove the user-data-dir when we fall through without launching.
+  // Helper: remove the user-data-dir when we fall through without
+  // launching. A persistent (caller-supplied) profile is never removed —
+  // persistence across launches is the whole point — so this no-ops there.
   const cleanupProfile = async (): Promise<void> => {
+    if (persistent) return;
     try {
       await rm(userDataDir, { recursive: true, force: true });
     } catch {
@@ -496,6 +538,14 @@ export interface DevServerOptions {
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
   /**
+   * Opt-in persistent browser profile for shell:"app". When set, Chrome
+   * launches with `--user-data-dir=<profile.dir>` instead of a throwaway
+   * temp dir, and the directory is never deleted on unmount — so
+   * login-gated views (DRM streaming, SSO dashboards) keep their session
+   * across launches. Ignored in tab mode. Default: throwaway temp profile.
+   */
+  profile?: { dir: string };
+  /**
    * Browser silence (ms) after which the mount transitions to disconnected.
    * The mount does NOT terminate on disconnect — only explicit close/signal/error does.
    */
@@ -607,6 +657,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     openBrowser = true,
     shell = "tab",
     windowSize,
+    profile,
     heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
     csp = "strict",
@@ -920,7 +971,13 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
-            const child = await openInAppMode(openUrl, windowSize, spawnImpl, fsAccessImpl);
+            const child = await openInAppMode(
+              openUrl,
+              windowSize,
+              profile?.dir,
+              spawnImpl,
+              fsAccessImpl,
+            );
             if (child) {
               trackedAppWindows.add(child);
               // Drop the entry when Chrome exits on its own (user closed
