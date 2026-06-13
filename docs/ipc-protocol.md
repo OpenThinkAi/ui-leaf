@@ -77,6 +77,8 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `openBrowser` | boolean |  | Whether to open a browser tab automatically on startup. | — |
 | `shell` | `"tab"` \| `"app"` |  | macOS open-in shell mode. | — |
 | `profile` | object `{ dir }` |  | Opt-in persistent browser profile for `shell:"app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Ignored in tab mode. | `dir` is a non-empty string |
+| `windowPosition` | object `{ x, y }` |  | Initial window position for `shell:"app"` (`--window-position=x,y`), in screen CSS pixels. Pairs with `windowSize`. Coordinates may be negative on multi-monitor layouts. Ignored in tab mode. | `x`, `y` are numbers |
+| `extensions` | array of strings |  | Absolute paths to unpacked Chrome extension dirs to load for `shell:"app"` (`--load-extension` + `--disable-extensions-except`). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. | non-empty path strings |
 | `csp` | string |  | Content Security Policy preset name or raw policy string. | — |
 | `heartbeatTimeoutMs` | integer |  | Milliseconds before a missing browser heartbeat closes the mount. Default: 5000. | min: 0 |
 | `startupGraceMs` | integer |  | Milliseconds to wait for a first browser connection before emitting disconnected. | min: 0 |

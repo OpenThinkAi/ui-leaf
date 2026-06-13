@@ -52,3 +52,68 @@ describe("buildAppModeArgs (#56 window size)", () => {
     expect(args).toContain("--window-size=600,870");
   });
 });
+
+describe("buildAppModeArgs (#65 window position)", () => {
+  test("emits --window-position=X,Y when a valid windowPosition is provided", () => {
+    const args = buildAppModeArgs(URL, DIR, undefined, { x: 100, y: 60 });
+    expect(args).toContain("--window-position=100,60");
+  });
+
+  test("allows negative coordinates (monitor left of / above the primary)", () => {
+    const args = buildAppModeArgs(URL, DIR, undefined, { x: -1920, y: -200 });
+    expect(args).toContain("--window-position=-1920,-200");
+  });
+
+  test("omits --window-position entirely when windowPosition is undefined", () => {
+    const args = buildAppModeArgs(URL, DIR);
+    expect(args.some((a) => a.startsWith("--window-position="))).toBe(false);
+  });
+
+  test("ignores non-finite coordinates and warns", () => {
+    for (const bad of [
+      { x: Number.NaN, y: 60 },
+      { x: 100, y: Number.POSITIVE_INFINITY },
+    ]) {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      const args = buildAppModeArgs(URL, DIR, undefined, bad);
+      expect(args.some((a) => a.startsWith("--window-position="))).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    }
+  });
+
+  test("rounds fractional coordinates to integers", () => {
+    const args = buildAppModeArgs(URL, DIR, undefined, { x: 100.4, y: 59.6 });
+    expect(args).toContain("--window-position=100,60");
+  });
+
+  test("composes with windowSize", () => {
+    const args = buildAppModeArgs(
+      URL,
+      DIR,
+      { width: 600, height: 870 },
+      { x: 100, y: 60 },
+    );
+    expect(args).toContain("--window-size=600,870");
+    expect(args).toContain("--window-position=100,60");
+  });
+});
+
+describe("buildAppModeArgs (#64 extensions)", () => {
+  test("emits paired --load-extension / --disable-extensions-except flags", () => {
+    const args = buildAppModeArgs(URL, DIR, undefined, undefined, [
+      "/abs/ext-a",
+      "/abs/ext-b",
+    ]);
+    expect(args).toContain("--load-extension=/abs/ext-a,/abs/ext-b");
+    expect(args).toContain("--disable-extensions-except=/abs/ext-a,/abs/ext-b");
+  });
+
+  test("omits both extension flags when extensions is undefined or empty", () => {
+    for (const ext of [undefined, []]) {
+      const args = buildAppModeArgs(URL, DIR, undefined, undefined, ext);
+      expect(args.some((a) => a.startsWith("--load-extension="))).toBe(false);
+      expect(args.some((a) => a.startsWith("--disable-extensions-except="))).toBe(false);
+    }
+  });
+});

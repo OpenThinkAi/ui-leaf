@@ -104,6 +104,23 @@ export interface MountOptions {
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
   /**
+   * Initial Chrome window position for `shell: "app"`, in screen CSS pixels,
+   * mapped to Chromium's `--window-position=x,y`. Pairs with `windowSize` for
+   * second-screen / tiled layouts. Coordinates may be negative (a monitor to
+   * the left of or above the primary). Ignored in `shell: "tab"` mode.
+   * Default: Chrome's default placement.
+   */
+  windowPosition?: { x: number; y: number };
+  /**
+   * Unpacked Chrome extensions to load into the `shell: "app"` window, mapped
+   * to `--load-extension` + `--disable-extensions-except`. Each entry is an
+   * absolute path to an unpacked-extension directory; pass them when you need
+   * a content-script extension running on the launched page (e.g. an overlay
+   * on a third-party stream). Dirs that don't exist are skipped with a stderr
+   * warning. Ignored in `shell: "tab"` mode. Default: none.
+   */
+  extensions?: string[];
+  /**
    * Opt-in persistent browser profile for `shell: "app"`.
    *
    * By default each mount launches Chrome with a throwaway `--user-data-dir`
@@ -289,6 +306,8 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     openBrowser: opts.openBrowser,
     shell: opts.shell,
     windowSize: opts.windowSize,
+    windowPosition: opts.windowPosition,
+    extensions: opts.extensions,
     profile: opts.profile,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
