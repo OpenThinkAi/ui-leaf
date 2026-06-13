@@ -262,6 +262,12 @@ For the full field-by-field reference — including every message type, all opti
   `{type:"close"}` on stdin.
 - **Handling concurrent mutations.** Each pending mutation has a unique `id`. Multiple
   mutations can be in flight — match `result`/`error` responses to requests by `id`.
+- **Persist a login across launches.** With `"shell": "app"`, set
+  `"profile": { "dir": "/abs/path" }` to give the chromeless window a persistent
+  Chrome `--user-data-dir` (created on first use, never deleted on unmount). Use this
+  for views behind DRM, SSO, or any session cookie so the user doesn't re-authenticate
+  every launch. Omit it (the default) for a throwaway profile. Ignored in tab mode; use
+  a distinct `dir` per concurrent app-mode mount.
 
 ## JS wrapper API
 
@@ -306,6 +312,7 @@ the rejection's `cause` carries the binary's exit reason.
 | `openBrowser` | `boolean` | `true` | Open the browser when ready. Set `false` for headless / smoke-test use; the URL is still available on `view.url`. |
 | `shell` | `"tab"` \| `"app"` | `"tab"` | `"tab"` opens in the user's default browser. `"app"` tries Chromium's `--app` mode (Chrome / Edge / Brave) for a chromeless window; falls back to `"tab"` on Safari, Firefox, or if no Chromium is installed. |
 | `windowSize` | `{ width: number; height: number }` | _none_ | Initial Chrome window size in CSS pixels for `shell: "app"`. Ignored in `"tab"` mode. |
+| `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount. Ignored in `"tab"` mode. |
 | `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |
 | `heartbeatTimeoutMs` | `number` | `5000` | Browser silence (ms) after which `disconnected` fires. Does **not** terminate the mount — only signals. |

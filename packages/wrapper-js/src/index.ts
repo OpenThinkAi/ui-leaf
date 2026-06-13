@@ -29,6 +29,19 @@ export type MountOptions = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /**
+   * Opt-in persistent browser profile for `shell: "app"`. `{ dir }` points
+   * Chrome at a persistent `--user-data-dir` (created on first use, never
+   * deleted on unmount) so login-gated views keep their session across
+   * launches. Ignored in tab mode. Default: throwaway temp profile.
+   *
+   * Pass an absolute path: a relative `dir` resolves against the binary's
+   * working directory at spawn time. Caveat: a persistent dir is a named
+   * profile, so two concurrent mounts pointed at the same `dir` share one
+   * Chrome process (single-instance lock) rather than getting isolated
+   * windows — use a distinct `dir` per concurrent app-mode mount.
+   */
+  profile?: { dir: string };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;

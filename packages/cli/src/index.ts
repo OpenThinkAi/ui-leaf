@@ -104,6 +104,26 @@ export interface MountOptions {
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
   /**
+   * Opt-in persistent browser profile for `shell: "app"`.
+   *
+   * By default each mount launches Chrome with a throwaway `--user-data-dir`
+   * that is discarded on unmount, so login-gated views (DRM streaming, SSO
+   * dashboards, anything behind a session cookie) re-authenticate every
+   * launch. Set `profile: { dir }` to point Chrome at a persistent
+   * directory instead: it is created on first use, used as the
+   * `--user-data-dir`, and **never deleted** on unmount, so the session
+   * survives across launches.
+   *
+   * Ignored in `shell: "tab"` mode (the default browser owns its own
+   * profile there). Pass an absolute path: a relative `dir` resolves against
+   * the process's working directory. Caveat: a persistent dir is a named
+   * profile, so two concurrent mounts pointed at the same `dir` share one
+   * Chrome process (single-instance lock) rather than getting isolated
+   * windows — use distinct dirs for concurrent app-mode mounts. Default:
+   * throwaway temp profile.
+   */
+  profile?: { dir: string };
+  /**
    * Abort to close the dev server early. The returned `closed` promise
    * resolves either way; if you need to distinguish a signal-driven close
    * from a natural tab-close, check `signal.aborted` after the await.
@@ -269,6 +289,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     openBrowser: opts.openBrowser,
     shell: opts.shell,
     windowSize: opts.windowSize,
+    profile: opts.profile,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,
     csp: opts.csp,

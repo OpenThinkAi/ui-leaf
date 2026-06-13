@@ -78,6 +78,8 @@ export type InboundConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
+  profile?: { dir: string };
   csp?: string;
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;
@@ -253,6 +255,20 @@ export function validateInboundShape(
       typeof m.startupGraceMs !== "number"
     ) {
       return { ok: false, reason: "config.startupGraceMs must be a number" };
+    }
+    if ("profile" in m && m.profile !== undefined) {
+      const p = m.profile;
+      if (
+        typeof p !== "object" ||
+        p === null ||
+        typeof (p as Record<string, unknown>).dir !== "string" ||
+        (p as Record<string, unknown>).dir === ""
+      ) {
+        return {
+          ok: false,
+          reason: 'config.profile must be an object with a non-empty string "dir"',
+        };
+      }
     }
     return { ok: true };
   }
