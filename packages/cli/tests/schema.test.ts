@@ -312,6 +312,17 @@ describe("(d) malformed inbound messages fail validation", () => {
     if (!r.ok) expect(r.reason).toContain("extensions");
   });
 
+  test("config: debugPort out of range (ui-leaf#66)", () => {
+    for (const bad of [0, 70000, 9222.5, "9222"]) {
+      const r = validateInboundShape(
+        { version: "1", view: "App", viewsRoot: "/tmp", debugPort: bad },
+        "config",
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("debugPort");
+    }
+  });
+
   // Post-config mutation responses
   test("result: missing id", () => {
     const r = validateInboundShape({ version: "1", type: "result" }, "post-config");
@@ -412,6 +423,7 @@ describe("validateInboundShape — valid messages pass", () => {
           profile: { dir: "/tmp/ui-leaf-profile" },
           windowPosition: { x: 100, y: 60 },
           extensions: ["/abs/ext-a", "/abs/ext-b"],
+          debugPort: 9222,
         },
         "config",
       ).ok,

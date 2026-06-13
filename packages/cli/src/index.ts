@@ -118,8 +118,23 @@ export interface MountOptions {
    * a content-script extension running on the launched page (e.g. an overlay
    * on a third-party stream). Dirs that don't exist are skipped with a stderr
    * warning. Ignored in `shell: "tab"` mode. Default: none.
+   *
+   * Note: Chrome 149+ disabled `--load-extension` from the command line. For
+   * augmenting pages on current Chrome, use `debugPort` (CDP attach) instead.
    */
   extensions?: string[];
+  /**
+   * Opt-in remote-debugging port for `shell: "app"`, mapped to Chromium's
+   * `--remote-debugging-port=<n>` bound to `127.0.0.1`. Lets a host process
+   * attach over the Chrome DevTools Protocol (CDP) — e.g. to inject an overlay
+   * onto a page you don't control via `Page.addScriptToEvaluateOnNewDocument`
+   * / `Runtime.evaluate`, a live two-way channel that survives Chrome's
+   * `--load-extension` lockdown. Must be an integer in 1–65535; the endpoint
+   * is loopback-only. If the port is already in use, Chrome still launches but
+   * may fail to bind the debug endpoint (no ui-leaf-level error) — pick a free
+   * port. Ignored in `shell: "tab"` mode. Default: no port.
+   */
+  debugPort?: number;
   /**
    * Opt-in persistent browser profile for `shell: "app"`.
    *
@@ -308,6 +323,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     windowSize: opts.windowSize,
     windowPosition: opts.windowPosition,
     extensions: opts.extensions,
+    debugPort: opts.debugPort,
     profile: opts.profile,
     heartbeatTimeoutMs: opts.heartbeatTimeoutMs,
     startupGraceMs: opts.startupGraceMs,

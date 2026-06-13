@@ -82,7 +82,13 @@
         "extensions": {
           "type": "array",
           "items": { "type": "string", "minLength": 1, "pattern": "^[^,]+$" },
-          "description": "Absolute paths to unpacked Chrome extension dirs to load for shell:\"app\" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode."
+          "description": "Absolute paths to unpacked Chrome extension dirs to load for shell:\"app\" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. Note: Chrome 149+ disabled --load-extension from the command line; use debugPort (CDP) to augment pages on current Chrome."
+        },
+        "debugPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Opt-in remote-debugging port for shell:\"app\" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode."
         },
         "csp": {
           "type": "string",
