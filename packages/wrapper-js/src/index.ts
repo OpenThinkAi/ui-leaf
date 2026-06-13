@@ -42,8 +42,22 @@ export type MountOptions = {
    * that don't exist are skipped with a stderr warning. Use for a content-script
    * extension on the launched page (e.g. an overlay on a third-party stream).
    * Ignored in tab mode. Default: none.
+   *
+   * Note: Chrome 149+ disabled `--load-extension` from the command line; use
+   * `debugPort` (CDP attach) to augment pages on current Chrome.
    */
   extensions?: string[];
+  /**
+   * Opt-in remote-debugging port for `shell: "app"` (`--remote-debugging-port`,
+   * bound to `127.0.0.1`). Lets a host process attach over the Chrome DevTools
+   * Protocol to inject/drive a page you don't control (e.g. an overlay on a
+   * DRM stream) — the live two-way channel that survives Chrome's
+   * `--load-extension` lockdown. Integer 1–65535. If the port is already in
+   * use, Chrome still launches but may fail to bind the debug endpoint (no
+   * ui-leaf-level error) — pick a free port. Ignored in tab mode.
+   * Default: no port.
+   */
+  debugPort?: number;
   /**
    * Opt-in persistent browser profile for `shell: "app"`. `{ dir }` points
    * Chrome at a persistent `--user-data-dir` (created on first use, never

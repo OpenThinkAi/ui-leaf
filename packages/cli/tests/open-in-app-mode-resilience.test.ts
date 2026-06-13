@@ -429,6 +429,35 @@ describe("window position (ui-leaf#65)", () => {
   );
 });
 
+describe("remote-debugging port (ui-leaf#66)", () => {
+  test(
+    "passes --remote-debugging-port + loopback address through to the launch args",
+    async () => {
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        debugPort: 9222,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
+      });
+
+      await new Promise((r) => setImmediate(r));
+
+      expect(spawnLog).toHaveLength(1);
+      expect(spawnLog[0]!.args).toContain("--remote-debugging-port=9222");
+      expect(spawnLog[0]!.args).toContain("--remote-debugging-address=127.0.0.1");
+    },
+    30_000,
+  );
+});
+
 describe("load extensions (ui-leaf#64)", () => {
   const extDir = join(tmpdir(), `ui-leaf-test-ext-${process.pid}-${Date.now()}`);
   const missingDir = join(tmpdir(), `ui-leaf-test-ext-missing-${process.pid}`);

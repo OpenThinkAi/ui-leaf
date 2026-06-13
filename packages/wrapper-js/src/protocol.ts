@@ -85,6 +85,8 @@ export type InboundConfig = {
   windowPosition?: { x: number; y: number };
   /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
   extensions?: string[];
+  /** Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in tab mode. */
+  debugPort?: number;
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;
@@ -176,6 +178,8 @@ export type SpawnConfig = {
   windowPosition?: { x: number; y: number };
   /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
   extensions?: string[];
+  /** Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in tab mode. */
+  debugPort?: number;
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;

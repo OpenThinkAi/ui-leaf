@@ -76,9 +76,10 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `port` | integer |  | TCP port to bind. 0 = OS-assigned. | min: 0, max: 65535 |
 | `openBrowser` | boolean |  | Whether to open a browser tab automatically on startup. | — |
 | `shell` | `"tab"` \| `"app"` |  | macOS open-in shell mode. | — |
-| `profile` | object `{ dir }` |  | Opt-in persistent browser profile for `shell:"app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Ignored in tab mode. | `dir` is a non-empty string |
-| `windowPosition` | object `{ x, y }` |  | Initial window position for `shell:"app"` (`--window-position=x,y`), in screen CSS pixels. Pairs with `windowSize`. Coordinates may be negative on multi-monitor layouts. Ignored in tab mode. | `x`, `y` are numbers |
-| `extensions` | array of strings |  | Absolute paths to unpacked Chrome extension dirs to load for `shell:"app"` (`--load-extension` + `--disable-extensions-except`). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. | non-empty path strings |
+| `profile` | object |  | Opt-in persistent browser profile for shell:"app". Without it each mount uses a throwaway temp profile discarded on unmount, so login-gated views re-authenticate every launch. Ignored in tab mode. | — |
+| `windowPosition` | object |  | Initial Chrome window position for shell:"app" (--window-position=x,y). Pairs with windowSize. Ignored in tab mode. | — |
+| `extensions` | array |  | Absolute paths to unpacked Chrome extension dirs to load for shell:"app" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. Note: Chrome 149+ disabled --load-extension from the command line; use debugPort (CDP) to augment pages on current Chrome. | — |
+| `debugPort` | integer |  | Opt-in remote-debugging port for shell:"app" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode. | min: 1, max: 65535 |
 | `csp` | string |  | Content Security Policy preset name or raw policy string. | — |
 | `heartbeatTimeoutMs` | integer |  | Milliseconds before a missing browser heartbeat closes the mount. Default: 5000. | min: 0 |
 | `startupGraceMs` | integer |  | Milliseconds to wait for a first browser connection before emitting disconnected. | min: 0 |

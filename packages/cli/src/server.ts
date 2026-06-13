@@ -267,6 +267,7 @@ export function buildAppModeArgs(
   windowSize?: { width: number; height: number },
   windowPosition?: { x: number; y: number },
   extensions?: string[],
+  debugPort?: number,
 ): string[] {
   const args = [
     `--app=${url}`,
@@ -313,6 +314,19 @@ export function buildAppModeArgs(
     args.push(`--load-extension=${dirs}`);
     args.push(`--disable-extensions-except=${dirs}`);
   }
+  if (debugPort !== undefined) {
+    // ui-leaf#64's --load-extension path is dead in Chrome 149; CDP is the
+    // remaining way to inject/drive a page we don't control. Bind to
+    // 127.0.0.1 so the debugging endpoint is loopback-only.
+    if (Number.isInteger(debugPort) && debugPort > 0 && debugPort <= 65535) {
+      args.push(`--remote-debugging-port=${debugPort}`);
+      args.push("--remote-debugging-address=127.0.0.1");
+    } else {
+      console.warn(
+        "ui-leaf: debugPort must be an integer in 1–65535; debugPort ignored",
+      );
+    }
+  }
   return args;
 }
 
@@ -322,6 +336,7 @@ async function openInAppMode(
   profileDir: string | undefined,
   windowPosition: { x: number; y: number } | undefined,
   extensions: string[] | undefined,
+  debugPort: number | undefined,
   spawnImpl: typeof spawn,
   fsAccessImpl: typeof access,
 ): Promise<ChildProcess | null> {
@@ -393,6 +408,7 @@ async function openInAppMode(
     windowSize,
     windowPosition,
     loadableExtensions,
+    debugPort,
   );
 
   // Helper: remove the user-data-dir when we fall through without
@@ -632,6 +648,12 @@ export interface DevServerOptions {
    */
   extensions?: string[];
   /**
+   * Opt-in remote-debugging port for shell:"app" (`--remote-debugging-port`,
+   * bound to 127.0.0.1) so a host process can attach over the Chrome DevTools
+   * Protocol. Integer 1–65535. Ignored in tab mode. Default: no port.
+   */
+  debugPort?: number;
+  /**
    * Opt-in persistent browser profile for shell:"app". When set, Chrome
    * launches with `--user-data-dir=<profile.dir>` instead of a throwaway
    * temp dir, and the directory is never deleted on unmount — so
@@ -753,6 +775,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     windowSize,
     windowPosition,
     extensions,
+    debugPort,
     profile,
     heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
@@ -1073,6 +1096,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
               profile?.dir,
               windowPosition,
               extensions,
+              debugPort,
               spawnImpl,
               fsAccessImpl,
             );

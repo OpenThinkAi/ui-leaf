@@ -82,6 +82,8 @@ export type InboundConfig = {
   windowPosition?: { x: number; y: number };
   /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
   extensions?: string[];
+  /** Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in tab mode. */
+  debugPort?: number;
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;
@@ -305,6 +307,16 @@ export function validateInboundShape(
             "config.extensions must be an array of non-empty path strings, none containing a comma",
         };
       }
+    }
+    if (
+      "debugPort" in m &&
+      m.debugPort !== undefined &&
+      (typeof m.debugPort !== "number" ||
+        !Number.isInteger(m.debugPort) ||
+        m.debugPort < 1 ||
+        m.debugPort > 65535)
+    ) {
+      return { ok: false, reason: "config.debugPort must be an integer in 1–65535" };
     }
     return { ok: true };
   }

@@ -117,3 +117,27 @@ describe("buildAppModeArgs (#64 extensions)", () => {
     }
   });
 });
+
+describe("buildAppModeArgs (#66 debug port)", () => {
+  test("emits --remote-debugging-port + loopback address for a valid port", () => {
+    const args = buildAppModeArgs(URL, DIR, undefined, undefined, undefined, 9222);
+    expect(args).toContain("--remote-debugging-port=9222");
+    expect(args).toContain("--remote-debugging-address=127.0.0.1");
+  });
+
+  test("omits the debug flags when debugPort is undefined", () => {
+    const args = buildAppModeArgs(URL, DIR);
+    expect(args.some((a) => a.startsWith("--remote-debugging-port="))).toBe(false);
+    expect(args.some((a) => a.startsWith("--remote-debugging-address="))).toBe(false);
+  });
+
+  test("ignores out-of-range / non-integer ports and warns", () => {
+    for (const bad of [0, -1, 70000, 9222.5, Number.NaN]) {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      const args = buildAppModeArgs(URL, DIR, undefined, undefined, undefined, bad);
+      expect(args.some((a) => a.startsWith("--remote-debugging-port="))).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    }
+  });
+});
