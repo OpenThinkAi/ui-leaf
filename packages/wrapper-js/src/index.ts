@@ -30,6 +30,21 @@ export type MountOptions = {
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
   /**
+   * Initial Chrome window position for `shell: "app"`, in screen CSS pixels
+   * (`--window-position=x,y`). Pairs with `windowSize` for tiled / second-screen
+   * layouts. Coordinates may be negative on multi-monitor setups. Ignored in
+   * tab mode. Default: Chrome's default placement.
+   */
+  windowPosition?: { x: number; y: number };
+  /**
+   * Unpacked Chrome extension dirs to load into the `shell: "app"` window
+   * (`--load-extension` + `--disable-extensions-except`). Absolute paths; dirs
+   * that don't exist are skipped with a stderr warning. Use for a content-script
+   * extension on the launched page (e.g. an overlay on a third-party stream).
+   * Ignored in tab mode. Default: none.
+   */
+  extensions?: string[];
+  /**
    * Opt-in persistent browser profile for `shell: "app"`. `{ dir }` points
    * Chrome at a persistent `--user-data-dir` (created on first use, never
    * deleted on unmount) so login-gated views keep their session across

@@ -81,6 +81,10 @@ export type InboundConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Initial Chrome window position in screen CSS pixels for shell:"app". Ignored in tab mode. */
+  windowPosition?: { x: number; y: number };
+  /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
+  extensions?: string[];
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;
@@ -168,6 +172,10 @@ export type SpawnConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Initial Chrome window position in screen CSS pixels for shell:"app". Ignored in tab mode. */
+  windowPosition?: { x: number; y: number };
+  /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
+  extensions?: string[];
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;

@@ -133,6 +133,20 @@ async function isExecutable(
   }
 }
 
+// Existence probe (F_OK) — used for extension dirs, where we want "does this
+// path exist" rather than the executable semantics of isExecutable.
+async function pathExists(
+  path: string,
+  accessImpl: typeof access,
+): Promise<boolean> {
+  try {
+    await accessImpl(path, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function attachLauncherErrorListener(
   child: ChildProcess | null | undefined,
   label: string,
@@ -235,11 +249,24 @@ function attachLauncherErrorListener(
  * `window.resizeTo()`. Non-finite or non-positive dimensions are not emitted
  * as a flag — but they warn, since silently opening at the default size is a
  * hard-to-spot footgun for a caller whose width/height computed to garbage.
+ *
+ * When `windowPosition` is provided (ui-leaf#65), append `--window-position=X,Y`
+ * so the window opens at the requested screen coordinates. Coordinates may be
+ * negative (a monitor left of / above the primary), so only non-finite values
+ * are rejected — and they warn, same rationale as windowSize.
+ *
+ * When `extensions` is provided (ui-leaf#64), append
+ * `--load-extension=<dirs>` and `--disable-extensions-except=<dirs>` so the
+ * listed unpacked extensions load into the window (and nothing else does).
+ * The caller is expected to have already filtered the list to existing dirs;
+ * an empty/undefined list emits neither flag.
  */
 export function buildAppModeArgs(
   url: string,
   userDataDir: string,
   windowSize?: { width: number; height: number },
+  windowPosition?: { x: number; y: number },
+  extensions?: string[],
 ): string[] {
   const args = [
     `--app=${url}`,
@@ -266,6 +293,26 @@ export function buildAppModeArgs(
       );
     }
   }
+  if (windowPosition !== undefined) {
+    const { x, y } = windowPosition;
+    // Coordinates can be negative on multi-monitor layouts, so unlike
+    // windowSize we only reject non-finite values (not non-positive ones).
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      args.push(`--window-position=${Math.round(x)},${Math.round(y)}`);
+    } else {
+      console.warn(
+        "ui-leaf: windowPosition coordinates must be finite numbers; windowPosition ignored",
+      );
+    }
+  }
+  if (extensions !== undefined && extensions.length > 0) {
+    const dirs = extensions.join(",");
+    // Pair the flags: --load-extension installs the unpacked extensions;
+    // --disable-extensions-except restricts the session to exactly those,
+    // so a persistent profile's other extensions don't also activate.
+    args.push(`--load-extension=${dirs}`);
+    args.push(`--disable-extensions-except=${dirs}`);
+  }
   return args;
 }
 
@@ -273,6 +320,8 @@ async function openInAppMode(
   url: string,
   windowSize: { width: number; height: number } | undefined,
   profileDir: string | undefined,
+  windowPosition: { x: number; y: number } | undefined,
+  extensions: string[] | undefined,
   spawnImpl: typeof spawn,
   fsAccessImpl: typeof access,
 ): Promise<ChildProcess | null> {
@@ -311,7 +360,40 @@ async function openInAppMode(
   } else {
     userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
   }
-  const launchArgs = buildAppModeArgs(url, userDataDir, windowSize);
+
+  // Filter the requested extension dirs (ui-leaf#64). Two skip reasons:
+  //   - contains a comma: Chrome parses --load-extension as a comma-separated
+  //     list, so an embedded comma would inject extra dirs and bypass
+  //     --disable-extensions-except. Reject defensively here too — the stdio
+  //     config layer validates this, but SDK mount() callers skip that path.
+  //   - not found: a typo'd path would otherwise silently load nothing, the
+  //     same silent-downgrade footgun the profile path guards against.
+  // Either way: warn (non-fatal) and load the survivors. Uses the injected
+  // fs.access so the binary-probe test seam covers it too.
+  let loadableExtensions: string[] | undefined;
+  if (extensions !== undefined && extensions.length > 0) {
+    const existing: string[] = [];
+    const skipped: string[] = [];
+    for (const dir of extensions) {
+      if (dir.includes(",")) skipped.push(`${dir} (contains ',')`);
+      else if (await pathExists(dir, fsAccessImpl)) existing.push(dir);
+      else skipped.push(`${dir} (not found)`);
+    }
+    if (skipped.length > 0) {
+      process.stderr.write(
+        `ui-leaf: extension dir(s) skipped: ${skipped.join(", ")}\n`,
+      );
+    }
+    loadableExtensions = existing.length > 0 ? existing : undefined;
+  }
+
+  const launchArgs = buildAppModeArgs(
+    url,
+    userDataDir,
+    windowSize,
+    windowPosition,
+    loadableExtensions,
+  );
 
   // Helper: remove the user-data-dir when we fall through without
   // launching. A persistent (caller-supplied) profile is never removed —
@@ -538,6 +620,18 @@ export interface DevServerOptions {
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
   /**
+   * Initial Chrome window position in screen CSS pixels for shell:"app".
+   * Coordinates may be negative on multi-monitor layouts. Ignored in tab mode.
+   */
+  windowPosition?: { x: number; y: number };
+  /**
+   * Unpacked Chrome extension dirs to load into the shell:"app" window
+   * (`--load-extension` + `--disable-extensions-except`). Absolute paths;
+   * dirs that don't exist are skipped with a stderr warning. Ignored in tab
+   * mode. Default: none.
+   */
+  extensions?: string[];
+  /**
    * Opt-in persistent browser profile for shell:"app". When set, Chrome
    * launches with `--user-data-dir=<profile.dir>` instead of a throwaway
    * temp dir, and the directory is never deleted on unmount — so
@@ -657,6 +751,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     openBrowser = true,
     shell = "tab",
     windowSize,
+    windowPosition,
+    extensions,
     profile,
     heartbeatTimeoutMs = 5_000,
     startupGraceMs = 30_000,
@@ -975,6 +1071,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
               openUrl,
               windowSize,
               profile?.dir,
+              windowPosition,
+              extensions,
               spawnImpl,
               fsAccessImpl,
             );

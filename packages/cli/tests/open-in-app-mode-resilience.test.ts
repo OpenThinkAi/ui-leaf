@@ -400,3 +400,96 @@ describe("persistent profile (ui-leaf#63)", () => {
     30_000,
   );
 });
+
+describe("window position (ui-leaf#65)", () => {
+  test(
+    "passes --window-position=X,Y through to the Chromium launch args",
+    async () => {
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        windowPosition: { x: 100, y: 60 },
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
+      });
+
+      await new Promise((r) => setImmediate(r));
+
+      expect(spawnLog).toHaveLength(1);
+      expect(spawnLog[0]!.args).toContain("--window-position=100,60");
+    },
+    30_000,
+  );
+});
+
+describe("load extensions (ui-leaf#64)", () => {
+  const extDir = join(tmpdir(), `ui-leaf-test-ext-${process.pid}-${Date.now()}`);
+  const missingDir = join(tmpdir(), `ui-leaf-test-ext-missing-${process.pid}`);
+  // A single element with an embedded comma — Chrome would parse it as two
+  // dirs. The server-layer filter must reject it (defends the SDK path, which
+  // skips the stdio config validation).
+  const commaDir = `${extDir},/abs/evil`;
+
+  // fs.access seam that accepts the platform Chrome binary (so the launch
+  // proceeds) AND the existing extension dir, but rejects everything else
+  // (so `missingDir` reads as absent). No real dirs needed — access is faked.
+  const fsAccessWithExt = (async (path: unknown, mode?: unknown): Promise<void> => {
+    if (path === extDir) return;
+    return fakeAccess(path, mode);
+  }) as typeof import("node:fs/promises").access;
+
+  test(
+    "loads existing dirs; skips missing and comma-injecting ones with a stderr warning",
+    async () => {
+      const stderrWrites: string[] = [];
+      const realStderrWrite = process.stderr.write.bind(process.stderr);
+      // biome-ignore lint/suspicious/noExplicitAny: stderr.write is overloaded
+      process.stderr.write = ((chunk: any) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write;
+
+      try {
+        server = await startDevServer({
+          view: "trivial",
+          viewsRoot: VIEWS_ROOT,
+          data: {},
+          port: 0,
+          openBrowser: true,
+          shell: "app",
+          extensions: [extDir, missingDir, commaDir],
+          heartbeatTimeoutMs: 75_000,
+          startupGraceMs: 0,
+          silent: true,
+          _spawn: fakeSpawn,
+          _fsAccess: fsAccessWithExt,
+        });
+
+        await new Promise((r) => setImmediate(r));
+      } finally {
+        process.stderr.write = realStderrWrite;
+      }
+
+      expect(spawnLog).toHaveLength(1);
+      const args = spawnLog[0]!.args;
+      // Only the existing dir is loaded; missing + comma dirs are filtered out.
+      expect(args).toContain(`--load-extension=${extDir}`);
+      expect(args).toContain(`--disable-extensions-except=${extDir}`);
+      expect(args.some((a) => a.includes(missingDir))).toBe(false);
+      // The comma path never reaches the args — no injection of /abs/evil.
+      expect(args.some((a) => a.includes("/abs/evil"))).toBe(false);
+      // Both skipped paths are surfaced, not silently dropped.
+      const stderr = stderrWrites.join("");
+      expect(stderr).toContain(missingDir);
+      expect(stderr).toContain("contains ','");
+    },
+    30_000,
+  );
+});

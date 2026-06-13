@@ -267,6 +267,51 @@ describe("(d) malformed inbound messages fail validation", () => {
     if (!r.ok) expect(r.reason).toContain("profile");
   });
 
+  test("config: windowPosition missing y (ui-leaf#65)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", windowPosition: { x: 100 } },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("windowPosition");
+  });
+
+  test("config: windowPosition with non-numeric coord (ui-leaf#65)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", windowPosition: { x: 100, y: "60" } },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("windowPosition");
+  });
+
+  test("config: extensions contains a non-string (ui-leaf#64)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", extensions: ["/abs/ok", 42] },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("extensions");
+  });
+
+  test("config: extensions contains an empty string (ui-leaf#64)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", extensions: [""] },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("extensions");
+  });
+
+  test("config: extensions entry containing a comma is rejected (injection guard)", () => {
+    const r = validateInboundShape(
+      { version: "1", view: "App", viewsRoot: "/tmp", extensions: ["/abs/a,/abs/evil"] },
+      "config",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("extensions");
+  });
+
   // Post-config mutation responses
   test("result: missing id", () => {
     const r = validateInboundShape({ version: "1", type: "result" }, "post-config");
@@ -365,6 +410,8 @@ describe("validateInboundShape — valid messages pass", () => {
           heartbeatTimeoutMs: 5000,
           startupGraceMs: 2000,
           profile: { dir: "/tmp/ui-leaf-profile" },
+          windowPosition: { x: 100, y: 60 },
+          extensions: ["/abs/ext-a", "/abs/ext-b"],
         },
         "config",
       ).ok,

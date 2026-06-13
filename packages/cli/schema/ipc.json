@@ -63,6 +63,27 @@
           "additionalProperties": false,
           "description": "Opt-in persistent browser profile for shell:\"app\". Without it each mount uses a throwaway temp profile discarded on unmount, so login-gated views re-authenticate every launch. Ignored in tab mode."
         },
+        "windowPosition": {
+          "type": "object",
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "integer",
+              "description": "Window left edge in screen CSS pixels. May be negative on multi-monitor layouts."
+            },
+            "y": {
+              "type": "integer",
+              "description": "Window top edge in screen CSS pixels. May be negative on multi-monitor layouts."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Initial Chrome window position for shell:\"app\" (--window-position=x,y). Pairs with windowSize. Ignored in tab mode."
+        },
+        "extensions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "pattern": "^[^,]+$" },
+          "description": "Absolute paths to unpacked Chrome extension dirs to load for shell:\"app\" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode."
+        },
         "csp": {
           "type": "string",
           "description": "Content Security Policy preset name or raw policy string."

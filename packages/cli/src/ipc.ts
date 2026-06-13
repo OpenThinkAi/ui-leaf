@@ -78,6 +78,10 @@ export type InboundConfig = {
   shell?: "tab" | "app";
   /** Initial Chrome window size in CSS pixels for shell:"app". Ignored in tab mode. */
   windowSize?: { width: number; height: number };
+  /** Initial Chrome window position in screen CSS pixels for shell:"app". Ignored in tab mode. */
+  windowPosition?: { x: number; y: number };
+  /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
+  extensions?: string[];
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
   csp?: string;
@@ -267,6 +271,38 @@ export function validateInboundShape(
         return {
           ok: false,
           reason: 'config.profile must be an object with a non-empty string "dir"',
+        };
+      }
+    }
+    if ("windowPosition" in m && m.windowPosition !== undefined) {
+      const wp = m.windowPosition;
+      if (
+        typeof wp !== "object" ||
+        wp === null ||
+        typeof (wp as Record<string, unknown>).x !== "number" ||
+        typeof (wp as Record<string, unknown>).y !== "number"
+      ) {
+        return {
+          ok: false,
+          reason: 'config.windowPosition must be an object with numeric "x" and "y"',
+        };
+      }
+    }
+    if ("extensions" in m && m.extensions !== undefined) {
+      if (
+        !Array.isArray(m.extensions) ||
+        // Reject commas inside a path: Chrome parses --load-extension as a
+        // comma-separated dir list, so a comma would inject extra extension
+        // dirs (and bypass --disable-extensions-except). Each array element
+        // must be exactly one dir.
+        !(m.extensions as unknown[]).every(
+          (x) => typeof x === "string" && x !== "" && !x.includes(","),
+        )
+      ) {
+        return {
+          ok: false,
+          reason:
+            "config.extensions must be an array of non-empty path strings, none containing a comma",
         };
       }
     }
