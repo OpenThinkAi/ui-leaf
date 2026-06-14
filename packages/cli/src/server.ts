@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -457,9 +457,11 @@ async function openInAppMode(
   }
 
   try {
-    // detached + own session/process group so cleanup() can signal the
-    // whole tree (helper processes included). Windows ignores `detached`
-    // for SIGTERM purposes — cleanup() uses `taskkill /T` there.
+    // detached + own session so the child isn't tied to the host's
+    // controlling terminal and `unref()` can drop it from the event loop.
+    // Teardown signals the spawned process tree (descendants of this pid),
+    // not the process group — see killChromeTree (ui-leaf#67). Windows
+    // ignores `detached` for SIGTERM purposes — cleanup() uses `taskkill /T`.
     const child = spawnImpl(binPath, launchArgs, {
       detached: true,
       stdio: "ignore",
@@ -477,9 +479,74 @@ async function openInAppMode(
   }
 }
 
+// A single row of the process table: a pid and its parent's pid.
+export type ProcessInfo = { pid: number; ppid: number };
+
+// Enumerate the live process table as (pid, ppid) rows. POSIX-only (the
+// Windows kill path uses `taskkill /T` and never calls this). Best-effort:
+// returns [] if `ps` is unavailable or output is unparseable, which makes the
+// caller fall back to signalling the root pid directly.
+function defaultListProcesses(): ProcessInfo[] {
+  try {
+    const out = execFileSync("ps", ["-axo", "pid=,ppid="], {
+      encoding: "utf8",
+    });
+    const rows: ProcessInfo[] = [];
+    for (const line of out.split("\n")) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]) });
+    }
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Collect `rootPid` and every process descended from it (transitively) from a
+ * snapshot of the process table. Exported for unit testing; pure given `procs`.
+ *
+ * This is what scopes teardown to *our* Chrome tree (ui-leaf#67): signalling
+ * only descendants of the pid we spawned can never reach a sibling mount's
+ * Chrome window, unlike a process-group signal which catches any process that
+ * shares the group (which Chrome's singleton can cause across mounts).
+ */
+export function collectDescendantPids(
+  rootPid: number,
+  procs: ProcessInfo[],
+): number[] {
+  const childrenByParent = new Map<number, number[]>();
+  for (const { pid, ppid } of procs) {
+    const siblings = childrenByParent.get(ppid);
+    if (siblings) siblings.push(pid);
+    else childrenByParent.set(ppid, [pid]);
+  }
+  const result: number[] = [];
+  const seen = new Set<number>();
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    result.push(cur);
+    for (const child of childrenByParent.get(cur) ?? []) stack.push(child);
+  }
+  return result;
+}
+
 /**
  * Terminate a Chromium child spawned by openInAppMode. Best-effort and
  * non-throwing: if the child has already exited, this is a no-op.
+ *
+ * **Scope (ui-leaf#67)**: signals only the process tree we spawned — the
+ * child pid plus its descendants (renderer/gpu/utility helpers, which are
+ * children of the browser process). We deliberately do NOT signal the whole
+ * process group (`kill(-pid)`): when Chrome's per-profile singleton routes a
+ * launch through an already-running instance, a process-group signal can
+ * reach a *sibling* mount's Chrome window and tear it down. Descendant-only
+ * signalling guarantees a mount's teardown never closes another mount's
+ * window, while still reaping our own helpers (matching the Windows
+ * `taskkill /T` tree semantics).
  *
  * **INVARIANT**: this is only ever called from startDevServer's
  * cleanup() — never from the heartbeat watcher / `disconnected` event.
@@ -490,7 +557,11 @@ async function openInAppMode(
  * shutdown, or an unrecoverable server error — all of which route
  * through cleanup().
  */
-function killChromeTree(child: ChildProcess, spawnImpl: typeof spawn): void {
+function killChromeTree(
+  child: ChildProcess,
+  spawnImpl: typeof spawn,
+  listProcesses: () => ProcessInfo[],
+): void {
   // `killed` flips after a successful signal; once set, further signals
   // are no-ops. Don't gate on `exitCode != null` — on detached children
   // we may not have received the exit event yet at cleanup time.
@@ -526,15 +597,21 @@ function killChromeTree(child: ChildProcess, spawnImpl: typeof spawn): void {
     return;
   }
 
-  // POSIX: the child was spawned `detached: true`, so it leads its own
-  // process group. Signal the negative PID to reach the whole group
-  // (includes Chrome's renderer/gpu/utility helpers). If this throws —
-  // ESRCH (group gone) or EPERM (would also fail a direct child.kill) —
-  // we're past recourse; best-effort is good enough here.
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    /* already gone or unsignalable */
+  // POSIX: signal only the tree we spawned — the child pid plus its
+  // descendants (Chrome's renderer/gpu/utility helpers are children of the
+  // browser process). A process-group signal (`kill(-pid)`) would also reach
+  // a sibling mount's window when Chrome's singleton shares a group across
+  // mounts (ui-leaf#67); descendant-scoping prevents that.
+  // collectDescendantPids always returns at least [pid] (even against an
+  // empty process table, e.g. when `ps` is unavailable), so the root is
+  // signalled regardless. Per-pid throws (ESRCH/EPERM) are best-effort no-ops.
+  const targets = collectDescendantPids(pid, listProcesses());
+  for (const target of targets) {
+    try {
+      process.kill(target, "SIGTERM");
+    } catch {
+      /* already gone or unsignalable */
+    }
   }
 }
 
@@ -713,6 +790,12 @@ export interface DevServerOptions {
    * Never set this in production.
    */
   _fsAccess?: typeof access;
+  /**
+   * Test seam: replace the process-table enumeration used by the POSIX
+   * `killChromeTree` path to scope teardown to the spawned process tree.
+   * Defaults to a `ps`-based lister. Never set this in production.
+   */
+  _listProcesses?: () => ProcessInfo[];
 }
 
 export type { CloseReason };
@@ -786,6 +869,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     _heartbeatCheckIntervalMs = 1000,
     _spawn: spawnImpl = spawn,
     _fsAccess: fsAccessImpl = access,
+    _listProcesses: listProcessesImpl = defaultListProcesses,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -1019,7 +1103,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       // so the window closes promptly even if the graceful HTTP shutdown
       // is slow (or stuck on a hung in-flight request).
       for (const child of trackedAppWindows) {
-        killChromeTree(child, spawnImpl);
+        killChromeTree(child, spawnImpl, listProcessesImpl);
       }
       trackedAppWindows.clear();
       // Graceful stop: waits for in-flight writes (including the closing SSE
