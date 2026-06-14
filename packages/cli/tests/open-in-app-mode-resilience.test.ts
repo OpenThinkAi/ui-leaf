@@ -224,8 +224,19 @@ describe("openInAppMode resilience + launch-args contract", () => {
 
 describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
   test(
-    "server.close() signals the tracked Chrome process (window closes on unmount)",
+    "server.close() signals only our Chrome tree, never a sibling mount (ui-leaf#67)",
     async () => {
+      // Fake process table: our spawned chrome (424242, the FakeChildProcess
+      // pid) + a helper descended from it, plus an UNRELATED sibling mount's
+      // chrome. The fix must signal the first two and never the sibling.
+      const HELPER_PID = 424243;
+      const SIBLING_PID = 555555;
+      const fakeProcessTree = () => [
+        { pid: 424242, ppid: 1 },
+        { pid: HELPER_PID, ppid: 424242 },
+        { pid: SIBLING_PID, ppid: 1 },
+      ];
+
       const srv = await startDevServer({
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
@@ -238,6 +249,7 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
         silent: true,
         _spawn: fakeSpawn,
         _fsAccess: fakeAccess,
+        _listProcesses: fakeProcessTree,
       });
 
       await new Promise((r) => setImmediate(r));
@@ -245,7 +257,7 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
       const tracked = childRef.current!;
 
       // Trigger the unmount path. cleanup() should reach into
-      // trackedAppWindows and signal the Chrome PID.
+      // trackedAppWindows and signal our Chrome tree.
       await srv.close();
       // server is now closed; null out the afterEach handle.
       server = null;
@@ -259,10 +271,14 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
         expect(args).toContain("/T");
         expect(args).toContain("/F");
       } else {
-        // POSIX path signals the negative PID (process group).
-        const groupSignals = processKillLog.filter((c) => c.pid === -tracked.pid);
-        expect(groupSignals.length).toBeGreaterThanOrEqual(1);
-        expect(groupSignals[0]!.signal).toBe("SIGTERM");
+        // POSIX path signals each pid in our tree (positive), NOT the process
+        // group (no negative-pid signal) and NOT the unrelated sibling.
+        const signaled = processKillLog.filter((c) => c.signal === "SIGTERM");
+        const pids = signaled.map((c) => c.pid);
+        expect(pids).toContain(tracked.pid); // our chrome
+        expect(pids).toContain(HELPER_PID); // our helper (descendant)
+        expect(pids).not.toContain(SIBLING_PID); // sibling mount untouched
+        expect(pids).not.toContain(-tracked.pid); // no process-group signal
       }
     },
     30_000,
