@@ -97,7 +97,7 @@
         "heartbeatTimeoutMs": {
           "type": "integer",
           "minimum": 0,
-          "description": "Milliseconds before a missing browser heartbeat closes the mount. Default: 5000."
+          "description": "Milliseconds of browser silence before the mount emits disconnected (the mount stays alive). Default: 15000 (3x the page's 5s heartbeat)."
         },
         "startupGraceMs": {
           "type": "integer",

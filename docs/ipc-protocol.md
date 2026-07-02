@@ -81,7 +81,7 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `extensions` | array |  | Absolute paths to unpacked Chrome extension dirs to load for shell:"app" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. Note: Chrome 149+ disabled --load-extension from the command line; use debugPort (CDP) to augment pages on current Chrome. | — |
 | `debugPort` | integer |  | Opt-in remote-debugging port for shell:"app" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode. | min: 1, max: 65535 |
 | `csp` | string |  | Content Security Policy preset name or raw policy string. | — |
-| `heartbeatTimeoutMs` | integer |  | Milliseconds before a missing browser heartbeat closes the mount. Default: 5000. | min: 0 |
+| `heartbeatTimeoutMs` | integer |  | Milliseconds of browser silence before the mount emits disconnected (the mount stays alive). Default: 15000 (3x the page's 5s heartbeat). | min: 0 |
 | `startupGraceMs` | integer |  | Milliseconds to wait for a first browser connection before emitting disconnected. | min: 0 |
 
 ---

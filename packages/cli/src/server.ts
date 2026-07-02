@@ -741,6 +741,8 @@ export interface DevServerOptions {
   /**
    * Browser silence (ms) after which the mount transitions to disconnected.
    * The mount does NOT terminate on disconnect — only explicit close/signal/error does.
+   * Defaults to DEFAULT_HEARTBEAT_TIMEOUT_MS (15000): 3× the page's 5s beat,
+   * so one late or clamped beat never fires a spurious `disconnected`.
    */
   heartbeatTimeoutMs?: number;
   /** Grace period after server start before the heartbeat watcher is armed. */
@@ -844,6 +846,24 @@ export interface DevServer {
   off: (event: DevServerEvent, listener: DevServerEventListener) => void;
 }
 
+/**
+ * Default browser-silence deadline (ms) before `disconnected` fires.
+ *
+ * 3× the injected bridge's HEARTBEAT_INTERVAL_MS (5s — see compile.ts): the
+ * old 5000 default equaled the beat interval, leaving zero slack, so any
+ * late beat (timer jitter, GC pause, Chrome background-timer clamping on an
+ * occluded window) flapped disconnected/reconnected on a healthy view
+ * (issue #75). 15s tolerates two missed beats while still reporting a
+ * genuinely-gone page within one timeout window.
+ *
+ * Known residual: Chrome's *intensive* throttling (page hidden > 5 min, no
+ * WebSocket/WebRTC/audio) clamps main-thread timers to one wake-up per
+ * minute; a window kept fully occluded that long can still flap. Hosts that
+ * keep views minimized for extended periods should pass
+ * `heartbeatTimeoutMs >= 65000`.
+ */
+export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
+
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
   const {
     view,
@@ -860,7 +880,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     extensions,
     debugPort,
     profile,
-    heartbeatTimeoutMs = 5_000,
+    heartbeatTimeoutMs = DEFAULT_HEARTBEAT_TIMEOUT_MS,
     startupGraceMs = 30_000,
     csp = "strict",
     allowedHosts,

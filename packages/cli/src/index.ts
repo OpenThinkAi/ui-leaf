@@ -163,12 +163,16 @@ export interface MountOptions {
   signal?: AbortSignal;
   /**
    * Browser silence (ms) after which the mount emits `disconnected`.
-   * Defaults to 5000 — tuned for the v1.0.0 subprocess-driver model where
-   * a fast `disconnected` signal lets the caller decide whether to close,
-   * reopen, or keep the mount alive. Raise it for sessions where the page
-   * may legitimately pause (devtools paused on a breakpoint, machine
-   * sleep, long background-tab throttling). Note: this no longer controls
-   * when the mount terminates — only when the `disconnected` event fires.
+   * Defaults to 15000 — 3× the page's 5s heartbeat, so a single late or
+   * clamped beat (timer jitter, GC pause, Chrome background-timer
+   * throttling on an occluded window) never fires a spurious
+   * `disconnected` while keeping genuine tab-close detection within one
+   * timeout window. Raise it (>= 65000) for windows kept hidden/minimized
+   * more than ~5 minutes, where Chrome's intensive throttling clamps
+   * main-thread timers to one wake-up per minute; also raise it for
+   * sessions where the page may legitimately pause (devtools paused on a
+   * breakpoint, machine sleep). Note: this no longer controls when the
+   * mount terminates — only when the `disconnected` event fires.
    */
   heartbeatTimeoutMs?: number;
   /**

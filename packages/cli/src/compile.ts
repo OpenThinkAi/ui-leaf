@@ -131,6 +131,15 @@ const SESSION_ENDED_HTML =
 const CLOSED_OVERLAY_HTML =
   '<div style="font-family:sans-serif;padding:2em;color:#555"><p>This view has closed.</p></div>';
 
+/**
+ * Interval (ms) between browser→server heartbeats sent by the injected
+ * bridge. The server's default disconnect deadline
+ * (DEFAULT_HEARTBEAT_TIMEOUT_MS in server.ts) must stay well above this —
+ * at least 2× — so a single late beat (timer jitter, GC pause, Chrome
+ * background-timer clamping) never trips a spurious `disconnected`.
+ */
+export const HEARTBEAT_INTERVAL_MS = 5_000;
+
 // Shared bridge injected into every compiled entry: mutation + heartbeat.
 const SHARED_BRIDGE = `
 async function mutate(name: string, args?: unknown): Promise<unknown> {
@@ -164,8 +173,13 @@ async function heartbeat(): Promise<void> {
     });
   } catch { /* server may have shut down; ignore */ }
 }
-setInterval(heartbeat, 5000);
+setInterval(heartbeat, ${HEARTBEAT_INTERVAL_MS});
 heartbeat();
+// Visibility transitions beat immediately: visibilitychange handlers are not
+// timer-throttled, so a just-revealed (or just-occluded) window refreshes the
+// server's heartbeat high-water mark without waiting on a possibly-clamped
+// interval tick.
+document.addEventListener("visibilitychange", () => { void heartbeat(); });
 
 function subscribeEvents(onEvent: (ev: { type: string; [k: string]: unknown }) => void): void {
   let delay = 250;

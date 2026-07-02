@@ -256,7 +256,7 @@ For the full field-by-field reference — including every message type, all opti
 - **Kill the child on parent shutdown** — close stdin (triggers a `caller` close) or
   send `SIGTERM`. Don't rely on heartbeat alone.
 - **Declare every mutation name** in `"mutations": []`. Undeclared names return 404.
-- **Tune `heartbeatTimeoutMs`** if the 5000 ms default doesn't fit. The mount does
+- **Tune `heartbeatTimeoutMs`** if the 15000 ms default doesn't fit. The mount does
   not terminate on disconnect — only on `{type:"close"}`, stdin close, or a signal.
   If you want fast shutdown on tab close, listen for `disconnected` and send
   `{type:"close"}` on stdin.
@@ -318,7 +318,7 @@ the rejection's `cause` carries the binary's exit reason.
 | `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount. Ignored in `"tab"` mode. |
 | `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |
-| `heartbeatTimeoutMs` | `number` | `5000` | Browser silence (ms) after which `disconnected` fires. Does **not** terminate the mount — only signals. |
+| `heartbeatTimeoutMs` | `number` | `15000` | Browser silence (ms) after which `disconnected` fires (3× the page's 5s heartbeat, so one late/clamped beat never flaps). Does **not** terminate the mount — only signals. Raise to `>= 65000` for windows kept hidden/minimized > 5 min (Chrome intensive timer throttling). |
 | `startupGraceMs` | `number` | `30000` | Grace period (ms) after server start before the heartbeat watcher arms. |
 | `signal` | `AbortSignal` | _none_ | Pre-ready abort kills the child; post-ready sends `close` then `SIGKILL` after 5s. The `closed` promise still resolves; check `signal.aborted` to distinguish. |
 | `silent` | `boolean` | `false` | Suppress the binary's stderr forwarding to the parent process. Useful when stdout is reserved for a structured protocol. |
