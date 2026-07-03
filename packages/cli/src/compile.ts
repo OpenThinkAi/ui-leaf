@@ -119,6 +119,13 @@ export interface CompileSourceOptions {
 
 export interface CompileResult {
   html: string;
+  /**
+   * The compiled JS bundle that `html` embeds. Present on success (empty
+   * `errors`); absent on compile failure. Callers that serve `html` keep
+   * this so `assembleHtml` can cheaply re-emit the page with fresh data
+   * (no rebundle) when the data changes — see server.ts update().
+   */
+  js?: string;
   errors: BuildError[];
 }
 
@@ -270,8 +277,13 @@ async function runBunBuild(entryPath: string): Promise<{ js: string } | { errors
   return { js: await output.text() };
 }
 
-/** Assemble the final HTML page from compiled JS and options. */
-function assembleHtml(opts: {
+/**
+ * Assemble the final HTML page from compiled JS and options.
+ *
+ * Exported so the dev server can re-emit the page with fresh data after an
+ * update() without re-running Bun.build — this is cheap string assembly.
+ */
+export function assembleHtml(opts: {
   js: string;
   title: string;
   csp: string | undefined;
@@ -457,6 +469,7 @@ ${SHARED_BRIDGE}
 
     return {
       html: assembleHtml({ js: buildResult.js, title, csp, data, dataLoader }),
+      js: buildResult.js,
       errors: [],
     };
   } finally {
@@ -519,6 +532,7 @@ ${SHARED_BRIDGE}
 
     return {
       html: assembleHtml({ js: buildResult.js, title, csp, data, dataLoader: false }),
+      js: buildResult.js,
       errors: [],
     };
   } finally {

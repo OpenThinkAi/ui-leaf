@@ -56,16 +56,90 @@ describe("update()", () => {
   );
 
   test(
-    "preserves previous HTML — no recompile (full page reload unchanged)",
+    "re-assembles served HTML with the new data — a later load first-paints fresh (issue #72)",
     async () => {
       const srv = await startTestServer({ data: { a: 1 } });
 
       const before = await (await fetch(srv.url + "/")).text();
+      // The bootstrap double-JSON-stringifies data, so keys appear escaped.
+      expect(before).toContain('\\"a\\":1');
+
       srv.update({ a: 2 });
       const after = await (await fetch(srv.url + "/")).text();
 
-      // HTML is entirely unchanged — update() does not regenerate the page.
-      expect(after).toBe(before);
+      // Same compiled bundle, fresh embedded data — no rebundle, but the
+      // page a new tab / reload / reopen() gets now carries the update.
+      expect(after).toContain('\\"a\\":2');
+      expect(after).not.toContain('\\"a\\":1');
+    },
+    30_000,
+  );
+
+  test(
+    "reopen() after update() serves the updated data, not the mount-time snapshot",
+    async () => {
+      let openedUrl = "";
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: { stale: true },
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _opener: async (u: string) => { openedUrl = u; },
+      });
+      const srv = server;
+
+      srv.update({ fresh: true });
+      await srv.reopen();
+
+      // The reopened tab loads the same / handler — fetch what it would get.
+      const html = await (await fetch(new URL(openedUrl).origin + "/")).text();
+      expect(html).toContain('\\"fresh\\":true');
+      expect(html).not.toContain('\\"stale\\":true');
+    },
+    30_000,
+  );
+
+  test(
+    "update() after swapView() re-assembles against the swapped bundle",
+    async () => {
+      const srv = await startTestServer({ data: { first: 1 } });
+
+      const errors = await srv.swapView(SIMPLE_VIEW);
+      expect(errors).toHaveLength(0);
+
+      srv.update({ second: 2 });
+      const html = await (await fetch(srv.url + "/")).text();
+      expect(html).toContain('\\"second\\":2');
+      expect(html).not.toContain('\\"first\\":1');
+    },
+    30_000,
+  );
+
+  test(
+    "dataLoader mode: update() never embeds data into the served HTML",
+    async () => {
+      server = await startDevServer({
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        dataLoader: async () => ({ secretInitial: true }),
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+      });
+      const srv = server;
+
+      srv.update({ secretUpdated: true });
+      const html = await (await fetch(srv.url + "/")).text();
+      // dataLoader HTML bootstraps from GET /api/data; neither payload may
+      // be written into the page.
+      expect(html).not.toContain("secretInitial");
+      expect(html).not.toContain("secretUpdated");
     },
     30_000,
   );

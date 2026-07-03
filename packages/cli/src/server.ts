@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import open from "open";
-import { compileView, compileSource } from "./compile.js";
+import { compileView, compileSource, assembleHtml } from "./compile.js";
 import type { CloseReason } from "./ipc.js";
 
 // Module-level stdout redirect state. Captured ONCE at module load so
@@ -815,7 +815,12 @@ export interface DevServer {
   close: (reason?: CloseReason) => Promise<void>;
   /**
    * Replace in-memory data and emit a `data-updated` event to all
-   * registered listeners. Does not recompile the view.
+   * registered listeners. Does not recompile the view (no rebundle), but
+   * does re-assemble the served HTML so `GET /` — a fresh tab, a reload,
+   * or a `reopen()` — first-paints with the latest data instead of the
+   * data baked in at compile time (issue #72, window B). In dataLoader
+   * mode the HTML embeds no data (the page bootstraps from GET /api/data),
+   * so no re-assembly happens.
    */
   update: (data: unknown) => void;
   /**
@@ -942,7 +947,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
 
     // Mutable view state: the / handler reads from this on every request.
     // update(), swapView(), patch() mutate it in place.
-    const viewState = { html: result.html, data: dataLoader ? loadedData : data };
+    //
+    // `js` is the compiled bundle embedded in `html`, retained so update()
+    // can re-assemble the page with fresh data without a rebundle.
+    // `htmlEmbedsData` tracks whether the *current* html bakes data in at
+    // assemble time (true unless mounted in dataLoader mode; swapView/patch
+    // always produce data-embedding pages) — when true, update() must
+    // re-assemble html or GET / would serve stale data (issue #72).
+    const viewState = {
+      html: result.html,
+      js: result.js ?? "",
+      htmlEmbedsData: !dataLoader,
+      data: dataLoader ? loadedData : data,
+    };
 
     // Minimal event broker. Pre-seeded so fireEvent's get() always returns a Set.
     const listeners = new Map<DevServerEvent, Set<DevServerEventListener>>([
@@ -1238,6 +1255,19 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       },
       update(newData: unknown): void {
         viewState.data = newData;
+        // Keep the served page in sync: the compiled html embeds data at
+        // assemble time, so without this a tab that hasn't SSE-subscribed
+        // yet (or a later reload / reopen()) would first-paint stale data.
+        // Cheap string assembly of the retained bundle — no rebundle.
+        if (viewState.htmlEmbedsData) {
+          viewState.html = assembleHtml({
+            js: viewState.js,
+            title,
+            csp: cspHeader ?? undefined,
+            data: newData,
+            dataLoader: false,
+          });
+        }
         broadcast({ type: "data-updated", data: newData });
         fireEvent("data-updated");
       },
@@ -1251,6 +1281,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         });
         if (r.errors.length > 0) return r.errors;
         viewState.html = r.html;
+        viewState.js = r.js ?? "";
+        viewState.htmlEmbedsData = true; // compileSource always embeds data
         broadcast({ type: "view-swapped" });
         fireEvent("view-swapped");
         return [];
@@ -1268,6 +1300,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         // Only mutate state on compile success (atomicity guarantee).
         viewState.data = newData;
         viewState.html = r.html;
+        viewState.js = r.js ?? "";
+        viewState.htmlEmbedsData = true; // compileSource always embeds data
         broadcast({ type: "data-updated", data: newData });
         broadcast({ type: "view-swapped" });
         fireEvent("data-updated");

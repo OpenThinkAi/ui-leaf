@@ -38,6 +38,18 @@
 //     {"version":"1","type":"error","message":"unknown message type: <x>"}
 //     The mount continues (non-fatal).
 //
+//   Pre-ready messages (after config, before {"type":"ready"} is emitted —
+//   the mount is compiling / starting its server / opening the browser):
+//     update       buffered; the LAST pre-ready update is applied to the
+//                  mount just before ready is emitted, so the first paint
+//                  reflects it (update is whole-data replacement).
+//     close        honored — the mount is torn down as soon as it comes up.
+//     ping         silently acknowledged, as always.
+//     view/patch/reopen
+//                  dropped with a non-fatal error line:
+//                  {"version":"1","type":"error","message":"cannot handle
+//                  \"<type>\" before ready; re-send after the ready event"}
+//
 //   view / patch compile failures preserve the previous view and produce:
 //     {"version":"1","type":"error","phase":"build","message":"<text>"}
 //
@@ -56,6 +68,7 @@
 import { createInterface } from "node:readline";
 import { mount, type MountOptions } from "./index.js";
 import {
+  classifyPreReadyMessage,
   emit as serializeEvent,
   parseInbound,
   validateInboundShape,
@@ -180,6 +193,17 @@ async function runMount(): Promise<void> {
   let mountedView: any = null;
   let stdinClosed = false;
 
+  // Pre-ready buffering (issue #72): the last `update` received before the
+  // mount is live, replayed just before `ready` is emitted. Wrapped in an
+  // object so `data: null` / `data: undefined` still count as "pending".
+  // The initializer cast keeps TS from flow-narrowing to `null` at the
+  // replay site — the assignment happens inside the rl.on("line") closure,
+  // which control-flow analysis can't see.
+  let pendingUpdate = null as { data: unknown } | null;
+  // A pre-ready `close` — honored via the same path as a pre-mount stdin
+  // close: tear the view down as soon as mount() resolves.
+  let preReadyCloseRequested = false;
+
   const enqueueViewOp = createViewOpQueue();
 
   rl.on("line", (line) => {
@@ -250,8 +274,28 @@ async function runMount(): Promise<void> {
       return;
     }
 
-    // Live-update commands — only dispatch if mountedView is ready.
-    if (!mountedView) return;
+    // Live-update commands — dispatch when the mount is live. Before that
+    // (issue #72: config parse → mount() resolution is a multi-second
+    // window covering compile + server start + browser spawn), nothing is
+    // dropped silently: `update` is buffered for replay, `close` is
+    // honored, and non-deferrable commands get an error line back.
+    if (!mountedView) {
+      const preReady = classifyPreReadyMessage(msg);
+      switch (preReady.action) {
+        case "buffer-update":
+          pendingUpdate = { data: preReady.data };
+          break;
+        case "close":
+          preReadyCloseRequested = true;
+          break;
+        case "ignore":
+          break;
+        case "reject":
+          emit({ type: "error", message: preReady.reason });
+          break;
+      }
+      return;
+    }
 
     if (msg.type === "update") {
       mountedView.update(msg.data);
@@ -368,9 +412,16 @@ async function runMount(): Promise<void> {
   try {
     const view = await mount(mountOpts);
     mountedView = view;
-    // If stdin closed while we were waiting on mount(), tear down right
-    // away rather than hold the dev server open.
-    if (stdinClosed) {
+    // Replay the last pre-ready update BEFORE emitting ready so the served
+    // page already reflects the caller's latest data on first paint
+    // (issue #72). Last write wins — update is whole-data replacement.
+    if (pendingUpdate) {
+      view.update(pendingUpdate.data);
+      pendingUpdate = null;
+    }
+    // If stdin closed — or the caller sent `close` — while we were waiting
+    // on mount(), tear down right away rather than hold the dev server open.
+    if (stdinClosed || preReadyCloseRequested) {
       void view.close();
     }
     view.on("disconnected", () => emit({ type: "disconnected" }));

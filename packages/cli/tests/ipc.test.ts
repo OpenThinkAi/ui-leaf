@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  classifyPreReadyMessage,
   emit,
   parseInbound,
   PROTOCOL_VERSION,
@@ -164,4 +165,44 @@ describe("new inbound message types (v1.0.0)", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("missing-version");
   });
+});
+
+describe("classifyPreReadyMessage (issue #72 — nothing dropped silently before ready)", () => {
+  const v = PROTOCOL_VERSION;
+
+  test("update → buffered with its payload", () => {
+    const action = classifyPreReadyMessage({ version: v, type: "update", data: { n: 1 } });
+    expect(action).toEqual({ action: "buffer-update", data: { n: 1 } });
+  });
+
+  test("update with data:null → still buffered (null is a valid whole-data replacement)", () => {
+    const action = classifyPreReadyMessage({ version: v, type: "update", data: null });
+    expect(action).toEqual({ action: "buffer-update", data: null });
+  });
+
+  test("close → honored", () => {
+    expect(classifyPreReadyMessage({ version: v, type: "close" })).toEqual({ action: "close" });
+  });
+
+  test("ping → silently acknowledged (contract: no reply, ever)", () => {
+    expect(classifyPreReadyMessage({ version: v, type: "ping" })).toEqual({ action: "ignore" });
+  });
+
+  test.each(["view", "patch", "reopen"] as const)(
+    "%s → rejected with a re-send-after-ready reason",
+    (type) => {
+      const msg: Inbound =
+        type === "view"
+          ? { version: v, type, source: "export default () => null" }
+          : type === "patch"
+            ? { version: v, type, data: {}, view: { source: "export default () => null" } }
+            : { version: v, type };
+      const action = classifyPreReadyMessage(msg);
+      expect(action.action).toBe("reject");
+      if (action.action === "reject") {
+        expect(action.reason).toContain(`"${type}"`);
+        expect(action.reason).toContain("before ready");
+      }
+    },
+  );
 });

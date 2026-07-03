@@ -146,7 +146,7 @@ Caller's response to a mutate request: error path. Correlated by id.
 
 ### `update`
 
-Replace in-memory data and emit a data-updated SSE event to connected browser tabs.
+Replace in-memory data. The served page HTML is re-assembled with the new data (no recompile) and a data-updated SSE event is broadcast to connected browser tabs, so already-connected tabs re-render and later loads (reload, reopen) first-paint the latest data. Sent before `ready`, the message is buffered — last write wins — and applied to the mount just before `ready` is emitted.
 
 **Example**
 
@@ -171,7 +171,7 @@ Replace in-memory data and emit a data-updated SSE event to connected browser ta
 
 ### `view`
 
-Swap the view source on-the-fly; triggers a recompile and a view-swapped SSE reload.
+Swap the view source on-the-fly; triggers a recompile and a view-swapped SSE reload. Not deferrable: sent before `ready` it is dropped with a non-fatal error line — re-send after the ready event.
 
 **Example**
 
@@ -194,7 +194,7 @@ Swap the view source on-the-fly; triggers a recompile and a view-swapped SSE rel
 
 ### `patch`
 
-Atomically replace both data and view source. If the compile fails, neither takes effect and the previous state is preserved.
+Atomically replace both data and view source. If the compile fails, neither takes effect and the previous state is preserved. Not deferrable: sent before `ready` it is dropped with a non-fatal error line — re-send after the ready event.
 
 **Example**
 
@@ -223,7 +223,7 @@ Atomically replace both data and view source. If the compile fails, neither take
 
 ### `reopen`
 
-Re-invoke open(url) to launch a fresh browser tab at the same mount URL.
+Re-invoke open(url) to launch a fresh browser tab at the same mount URL. The served page always reflects the latest data (see InboundUpdate). Not deferrable: sent before `ready` it is dropped with a non-fatal error line (the initial open is already in flight).
 
 **Example**
 
@@ -244,7 +244,7 @@ Re-invoke open(url) to launch a fresh browser tab at the same mount URL.
 
 ### `close`
 
-Terminate the mount cleanly (caller-initiated close). The binary emits OutboundClosed with reason:"caller" and exits 0.
+Terminate the mount cleanly (caller-initiated close). The binary emits OutboundClosed with reason:"caller" and exits 0. Honored even before `ready`: the mount is torn down as soon as it comes up.
 
 **Example**
 
