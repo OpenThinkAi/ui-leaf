@@ -14,8 +14,11 @@
 //      surface, skip with exit 0 (doc/test/config-only PRs don't pay the cost).
 //   2. Build the host-platform binary ONLY (not the full 5-target matrix)
 //      into a tempdir via `scripts/build-binaries.ts --targets <host> --out <tmp>`.
-//   3. Drive the binary stdin-IPC `mount → update → close` round-trip directly
-//      against the built binary (mirrors smoke.yml's `binary` job driver).
+//   3. Drive the binary stdin-IPC round-trip directly against the built
+//      binary (mirrors smoke.yml's `binary` job driver): mount with an
+//      update written BEFORE `ready` (must be buffered and reflected in the
+//      first served paint — issue #72), then a post-ready update (the served
+//      HTML must re-assemble so reloads/reopens get fresh data), then close.
 //   4. Drive the wrapper round-trip by importing `packages/wrapper-js/src/`
 //      TypeScript directly (bun runs TS) and calling `mount({ binaryPath: ... })`
 //      with the just-built binary. No npm install. No GH Releases.
@@ -192,7 +195,7 @@ async function writeSmokeView(viewsRoot: string): Promise<void> {
 // -----------------------------------------------------------------------------
 
 async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promise<void> {
-  console.log("[binary] driving stdin-IPC mount → update → close");
+  console.log("[binary] driving stdin-IPC mount → pre-ready update → served-HTML asserts → update → close");
   await new Promise<void>((resolveDone, rejectDone) => {
     const child = spawn(binaryPath, ["mount"], {
       stdio: ["pipe", "pipe", "inherit"],
@@ -208,15 +211,54 @@ async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promis
     });
 
     let ready = false;
-    let updateSent = false;
+    let asserted = false;
     let closeSent = false;
     let closed = false;
     let stdoutBuf = "";
+    let failed = false;
 
     const hardTimeout = setTimeout(() => {
       child.kill();
       rejectDone(new Error("binary round-trip: timeout (mount did not close within 30s)"));
     }, 30000);
+
+    const fail = (err: Error): void => {
+      failed = true;
+      clearTimeout(hardTimeout);
+      child.kill();
+      rejectDone(err);
+    };
+
+    // On ready: assert the served page first-paints with the PRE-ready
+    // update's data (issue #72 — the update written right after the config,
+    // long before ready, must be buffered and applied, not dropped), then
+    // send a post-ready update and assert the served page tracks it (the
+    // HTML re-assembles on update; a reopen()'d tab would get this page).
+    const assertServedPages = async (port: number): Promise<void> => {
+      const base = `http://127.0.0.1:${port}`;
+
+      const first = await (await fetch(`${base}/`)).text();
+      if (!first.includes("pre-ready-payload")) {
+        throw new Error("binary round-trip: served HTML does not reflect the pre-ready update (issue #72 regression — update sent before 'ready' was dropped or not applied)");
+      }
+      if (first.includes("smoke-ok")) {
+        throw new Error("binary round-trip: served HTML still embeds the config-time data despite a pre-ready update");
+      }
+      console.log("[binary] pre-ready update reflected in first served paint");
+
+      child.stdin.write(
+        JSON.stringify({ version: "1", type: "update", data: { title: "mutated" } }) + "\n",
+      );
+      // Give the single-threaded event loop a beat to process the line.
+      await new Promise((r) => setTimeout(r, 500));
+
+      const second = await (await fetch(`${base}/`)).text();
+      if (!second.includes("mutated") || second.includes("pre-ready-payload")) {
+        throw new Error("binary round-trip: served HTML not re-assembled after post-ready update (stale data would be served to reloads/reopens)");
+      }
+      console.log("[binary] post-ready update reflected in served HTML");
+      asserted = true;
+    };
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBuf += chunk.toString();
@@ -234,23 +276,21 @@ async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promis
         if (event.type === "ready" && !ready) {
           ready = true;
           console.log(`[binary] ready on port ${event.port}`);
-          child.stdin.write(
-            JSON.stringify({ version: "1", type: "update", data: { title: "mutated" } }) + "\n",
-          );
-          updateSent = true;
-          setTimeout(() => {
-            child.stdin.write(JSON.stringify({ version: "1", type: "close" }) + "\n");
-            closeSent = true;
-          }, 500);
+          void assertServedPages(event.port as number)
+            .then(() => {
+              child.stdin.write(JSON.stringify({ version: "1", type: "close" }) + "\n");
+              closeSent = true;
+            })
+            .catch((err: unknown) => {
+              fail(err instanceof Error ? err : new Error(String(err)));
+            });
         }
         if (event.type === "closed") {
           closed = true;
           console.log("[binary] closed event received");
         }
         if (event.type === "error") {
-          clearTimeout(hardTimeout);
-          child.kill();
-          rejectDone(new Error(`binary round-trip: mount error: ${event.message ?? "(no message)"}`));
+          fail(new Error(`binary round-trip: mount error: ${event.message ?? "(no message)"}`));
           return;
         }
       }
@@ -263,16 +303,23 @@ async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promis
 
     child.on("exit", (code) => {
       clearTimeout(hardTimeout);
+      if (failed) return;
       if (!ready) return rejectDone(new Error("binary round-trip: binary exited before 'ready'"));
-      if (!updateSent) return rejectDone(new Error("binary round-trip: update was never sent"));
+      if (!asserted) return rejectDone(new Error("binary round-trip: served-HTML asserts never completed"));
       if (!closeSent) return rejectDone(new Error("binary round-trip: close was never sent"));
       if (!closed) return rejectDone(new Error("binary round-trip: no 'closed' event received"));
       console.log(`[binary] PASSED (exit code: ${code})`);
       resolveDone();
     });
 
-    // Send config as the first stdin line.
+    // Send config as the first stdin line, then IMMEDIATELY an update —
+    // guaranteed to land while the mount is still compiling / starting up,
+    // i.e. before 'ready'. Per the protocol this must be buffered (last
+    // write wins) and applied before ready is emitted, never dropped.
     child.stdin.write(config + "\n");
+    child.stdin.write(
+      JSON.stringify({ version: "1", type: "update", data: { title: "pre-ready-payload" } }) + "\n",
+    );
   });
 }
 

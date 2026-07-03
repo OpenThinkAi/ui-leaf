@@ -109,14 +109,25 @@ export type InboundMutateResponse = InboundMutateResult | InboundMutateError;
 
 // New inbound message types (v1.0.0): live-update handlers.
 
-/** Replace in-memory data and emit a data-updated SSE event. */
+/**
+ * Replace in-memory data. The served page HTML is re-assembled with the new
+ * data and a data-updated SSE event is broadcast, so both a tab that is
+ * already connected and one that loads (or reloads / reopens) later render
+ * the latest data. If sent before `ready`, the message is buffered — last
+ * write wins, since update is whole-data replacement — and applied to the
+ * mount just before `ready` is emitted (issue #72).
+ */
 export type InboundUpdate = {
   version: ProtocolVersion;
   type: "update";
   data: unknown;
 };
 
-/** Swap the view source on-the-fly; triggers a recompile and view-swapped SSE event. */
+/**
+ * Swap the view source on-the-fly; triggers a recompile and view-swapped SSE
+ * event. Not deferrable: sent before `ready` it is dropped with a non-fatal
+ * error line (see classifyPreReadyMessage).
+ */
 export type InboundView = {
   version: ProtocolVersion;
   type: "view";
@@ -125,7 +136,8 @@ export type InboundView = {
 
 /**
  * Atomically replace both data and view source. If the compile fails, neither
- * takes effect and the previous state is preserved.
+ * takes effect and the previous state is preserved. Not deferrable: sent
+ * before `ready` it is dropped with a non-fatal error line.
  */
 export type InboundPatch = {
   version: ProtocolVersion;
@@ -134,13 +146,20 @@ export type InboundPatch = {
   view: { source: string };
 };
 
-/** Re-invoke open(url) to launch a fresh browser tab at the same URL. */
+/**
+ * Re-invoke open(url) to launch a fresh browser tab at the same URL. Not
+ * deferrable: sent before `ready` it is dropped with a non-fatal error line
+ * (the initial open is already in flight).
+ */
 export type InboundReopen = {
   version: ProtocolVersion;
   type: "reopen";
 };
 
-/** Terminate the mount cleanly (caller-initiated close). */
+/**
+ * Terminate the mount cleanly (caller-initiated close). Honored even before
+ * `ready`: the mount is torn down as soon as it comes up.
+ */
 export type InboundClose = {
   version: ProtocolVersion;
   type: "close";
@@ -369,6 +388,56 @@ export function validateInboundShape(
       return { ok: true };
     default:
       return { ok: false, reason: `unknown message type: "${type}"` };
+  }
+}
+
+/**
+ * Policy for live-update messages that arrive before the mount is ready
+ * (issue #72). Between the config line and the `ready` event the mount is
+ * compiling, starting its server, and spawning the browser — a multi-second
+ * window in which raw-stdio callers may already be streaming commands.
+ * Nothing in that window may be dropped silently.
+ *
+ *   buffer-update — `update` is whole-data replacement, so the latest
+ *                   pre-ready payload is buffered (last write wins) and
+ *                   applied just before `ready` is emitted.
+ *   close         — the caller wants the mount gone; honored as soon as
+ *                   the mount comes up (same path as stdin close).
+ *   ignore        — `ping` is contractually a silent acknowledgement.
+ *   reject        — everything else (`view`, `patch`, `reopen`) cannot be
+ *                   safely deferred; the caller gets a non-fatal error line
+ *                   and should re-send after `ready`.
+ *
+ * Mutation responses (`result`/`error`, identified by `id`) never reach this
+ * classification — they are correlated to pending mutations upstream (and no
+ * mutation can be outstanding before the mount exists).
+ */
+export type PreReadyAction =
+  | { action: "buffer-update"; data: unknown }
+  | { action: "close" }
+  | { action: "ignore" }
+  | { action: "reject"; reason: string };
+
+export function classifyPreReadyMessage(msg: Inbound): PreReadyAction {
+  switch (msg.type) {
+    case "update":
+      return { action: "buffer-update", data: msg.data };
+    case "close":
+      return { action: "close" };
+    case "ping":
+      return { action: "ignore" };
+    // Mutation responses are handled before this point; treat defensively
+    // as ignorable rather than erroring on a message we asked for.
+    case "result":
+    case "error":
+      return { action: "ignore" };
+    case "view":
+    case "patch":
+    case "reopen":
+      return {
+        action: "reject",
+        reason: `cannot handle "${msg.type}" before ready; re-send after the ready event`,
+      };
   }
 }
 
