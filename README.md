@@ -579,3 +579,8 @@ The consumer CLI is responsible for (out of ui-leaf's scope):
 ## License
 
 [MIT](./LICENSE)
+
+---
+
+Built by [Saltline Digital](https://saltline.digital) — custom software and AI
+automation for small businesses.
