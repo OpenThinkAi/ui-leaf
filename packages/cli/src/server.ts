@@ -1224,7 +1224,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         try {
           return Bun.serve({ hostname: "127.0.0.1", port: bunPort + i, fetch: handler, error: serverErrorHandler, idleTimeout: 0 });
         } catch (err) {
-          const isAddrinuse = err instanceof Error && err.message.includes("EADDRINUSE");
+          // Bun surfaces EADDRINUSE on `code`; the message is a human string
+          // ("Failed to start server. Is port 5810 in use?") that stopped
+          // containing "EADDRINUSE" somewhere before Bun 1.3, silently
+          // disabling this bump. Check both.
+          const isAddrinuse =
+            err instanceof Error &&
+            ((err as NodeJS.ErrnoException).code === "EADDRINUSE" ||
+              err.message.includes("EADDRINUSE"));
           if (!isAddrinuse || i === MAX_PORT_ATTEMPTS - 1) {
             if (isAddrinuse) {
               throw new Error(
