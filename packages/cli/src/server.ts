@@ -700,6 +700,15 @@ export interface DevServerOptions {
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
   port?: number;
+  /**
+   * Launch a browser at the view's tokened URL once the server is up.
+   * Default: true. Even when true, the launch is suppressed at the
+   * environment level by `UI_LEAF_NO_OPEN` or an SSH session — see
+   * {@link resolveOpenSuppression}. When suppressed, the tokened URL is
+   * printed to stderr instead so the user can open it (or tunnel to it)
+   * themselves. Explicit `openBrowser: false` prints nothing — that is
+   * the programmatic "I own the UX" switch.
+   */
   openBrowser?: boolean;
   /**
    * Browser shell. Defaults to "tab".
@@ -798,6 +807,14 @@ export interface DevServerOptions {
    * Defaults to a `ps`-based lister. Never set this in production.
    */
   _listProcesses?: () => ProcessInfo[];
+  /**
+   * Test seam: environment consulted by {@link resolveOpenSuppression}.
+   * Defaults to `process.env`. Tests that assert on browser-open behavior
+   * must pass `{}` (or a crafted env) so a developer's real SSH session /
+   * UI_LEAF_NO_OPEN setting can't flip the outcome. Never set this in
+   * production.
+   */
+  _env?: Record<string, string | undefined>;
 }
 
 export type { CloseReason };
@@ -869,6 +886,40 @@ export interface DevServer {
  */
 export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
 
+/** Why an otherwise-requested browser launch was suppressed. */
+export type OpenSuppressionReason = "env" | "ssh";
+
+/**
+ * Environment-level browser-launch suppression, resolved once per mount.
+ *
+ * - `UI_LEAF_NO_OPEN` set to anything except `0`/`false`/`no` → suppress
+ *   ("env"). The falsy spellings force a launch even under SSH, for the
+ *   rare "I'm SSH'd in but screen-sharing the remote desktop" case.
+ * - Otherwise, `SSH_CONNECTION`/`SSH_TTY` present → suppress ("ssh"):
+ *   the browser would open on the remote machine's desktop, which the
+ *   SSH user is almost never looking at.
+ * - Otherwise → launch normally (null).
+ *
+ * Suppression replaces the launch with a stderr note carrying the tokened
+ * URL, so the user can open it manually — typically through an SSH tunnel
+ * (`ssh -L <port>:127.0.0.1:<port> <host>`). The token must ride along:
+ * without the `#token=` fragment the page renders but /mutate, /events,
+ * /api/data and /heartbeat all 401. Printing the token to the terminal is
+ * an accepted trade-off: the server is loopback-bound + Host-checked, and
+ * the terminal is the same trust domain that spawned the mount.
+ */
+export function resolveOpenSuppression(
+  env: Record<string, string | undefined>,
+): OpenSuppressionReason | null {
+  const raw = env.UI_LEAF_NO_OPEN?.trim().toLowerCase();
+  if (raw !== undefined && raw !== "") {
+    if (raw === "0" || raw === "false" || raw === "no") return null;
+    return "env";
+  }
+  if ((env.SSH_CONNECTION ?? "") !== "" || (env.SSH_TTY ?? "") !== "") return "ssh";
+  return null;
+}
+
 export async function startDevServer(opts: DevServerOptions): Promise<DevServer> {
   const {
     view,
@@ -895,6 +946,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     _spawn: spawnImpl = spawn,
     _fsAccess: fsAccessImpl = access,
     _listProcesses: listProcessesImpl = defaultListProcesses,
+    _env = process.env as Record<string, string | undefined>,
   } = opts;
   const cspHeader = resolveCsp(csp);
   const allowedHostSet = new Set<string>(DEFAULT_LOOPBACK_HOSTNAMES);
@@ -1206,8 +1258,21 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     // The public `url` returned to consumers stays fragment-free.
     const openUrl = `${url}/#token=${token}`;
 
-    // Browser-open implementation, or the test-seam override if one was supplied.
-    const doOpen: () => Promise<void> = _opener
+    // Environment-level launch suppression (UI_LEAF_NO_OPEN / SSH session).
+    // Resolved once so the initial open and every reopen() behave the same.
+    const openSuppression = resolveOpenSuppression(_env);
+    const announceSuppressedOpen = (): void => {
+      const reason =
+        openSuppression === "env" ? "UI_LEAF_NO_OPEN is set" : "SSH session detected";
+      process.stderr.write(
+        `ui-leaf: not launching a browser (${reason}). Open this URL — the #token fragment is required:\n` +
+          `  ${openUrl}\n` +
+          `ui-leaf: from another device, tunnel first: ssh -L ${actualPort}:127.0.0.1:${actualPort} <this-host>\n`,
+      );
+    };
+
+    // Browser-launch implementation, or the test-seam override if one was supplied.
+    const launchBrowser: () => Promise<void> = _opener
       ? () => _opener(openUrl)
       : async () => {
           if (shell === "app") {
@@ -1237,6 +1302,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
             await open(openUrl);
           }
         };
+
+    const doOpen = async (): Promise<void> => {
+      if (openSuppression !== null) {
+        announceSuppressedOpen();
+        return;
+      }
+      await launchBrowser();
+    };
 
     if (openBrowser) {
       await doOpen();

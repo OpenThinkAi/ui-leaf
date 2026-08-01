@@ -28,6 +28,7 @@ async function newServer(data: unknown = { v: 0 }): Promise<{ srv: DevServer; to
   let openUrl = "";
   const srv = track(
     await startDevServer({
+      _env: {},
       view: "trivial",
       viewsRoot: VIEWS_ROOT,
       data,

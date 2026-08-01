@@ -27,6 +27,7 @@ async function startTestServer(opts?: {
   openBrowser?: boolean;
 }): Promise<DevServer> {
   server = await startDevServer({
+    _env: {},
     view: "trivial",
     viewsRoot: VIEWS_ROOT,
     data: opts?.data ?? { initial: true },
@@ -80,6 +81,7 @@ describe("update()", () => {
     async () => {
       let openedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: { stale: true },
@@ -123,6 +125,7 @@ describe("update()", () => {
     "dataLoader mode: update() never embeds data into the served HTML",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         dataLoader: async () => ({ secretInitial: true }),
@@ -248,6 +251,7 @@ describe("reopen()", () => {
       };
 
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -301,6 +305,7 @@ describe("mutation responses still work after adding new handlers", () => {
     "POST /mutate without auth token returns 401",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -331,6 +336,7 @@ describe("strict CSP preset", () => {
     "style-src includes 'https:' to permit external stylesheet links (Google Fonts CSS, etc.)",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},

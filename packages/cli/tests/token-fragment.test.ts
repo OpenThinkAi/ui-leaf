@@ -19,6 +19,7 @@ async function startTestServer(opts?: {
   mutations?: Record<string, (args: unknown) => unknown>;
 }): Promise<DevServer> {
   server = await startDevServer({
+    _env: {},
     view: "trivial",
     viewsRoot: VIEWS_ROOT,
     data: opts?.data ?? {},
@@ -47,6 +48,7 @@ describe("token delivery via URL fragment", () => {
     async () => {
       let capturedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -68,6 +70,7 @@ describe("token delivery via URL fragment", () => {
     async () => {
       let capturedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -91,6 +94,7 @@ describe("token delivery via URL fragment", () => {
     async () => {
       let capturedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -400,6 +404,7 @@ describe("server auth enforcement (AC#6)", () => {
     async () => {
       let capturedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -434,6 +439,7 @@ describe("server auth enforcement (AC#6)", () => {
     async () => {
       let capturedUrl = "";
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
