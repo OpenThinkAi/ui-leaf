@@ -83,6 +83,14 @@ export interface MountOptions {
    * Open the browser when ready. Defaults to true. When false, mount()
    * returns the URL on its resolved value so the caller can drive a
    * headless browser, log the address, etc.
+   *
+   * Even when true, the launch is suppressed at the environment level:
+   * `UI_LEAF_NO_OPEN` (any value but `0`/`false`/`no`) forces it off, and
+   * an SSH session (`SSH_CONNECTION`/`SSH_TTY`) auto-suppresses — a
+   * browser opening on the remote desktop is never what an SSH user
+   * wants. When suppressed, the full tokened URL is printed to stderr so
+   * the user can open it manually, typically through an SSH tunnel.
+   * `UI_LEAF_NO_OPEN=0` overrides the SSH auto-detection.
    */
   openBrowser?: boolean;
   /**
@@ -251,6 +259,12 @@ export interface MountOptions {
    * Never set this in production.
    */
   _opener?: (url: string) => Promise<void>;
+  /**
+   * Test seam: environment consulted for launch suppression
+   * (`UI_LEAF_NO_OPEN` / SSH detection). Defaults to `process.env`.
+   * Never set this in production.
+   */
+  _env?: Record<string, string | undefined>;
 }
 
 export interface MountedView {
@@ -336,6 +350,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     silent: opts.silent,
     _heartbeatCheckIntervalMs: opts._heartbeatCheckIntervalMs,
     _opener: opts._opener,
+    _env: opts._env,
   });
 
   const onSignal = (signal: NodeJS.Signals): void => {

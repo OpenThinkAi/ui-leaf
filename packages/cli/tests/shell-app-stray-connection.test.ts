@@ -24,6 +24,7 @@ describe('shell:"app" survives unauthenticated traffic (ui-leaf#54)', () => {
       };
 
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: { v: 1 },
@@ -84,6 +85,7 @@ describe('shell:"app" survives unauthenticated traffic (ui-leaf#54)', () => {
       const noopOpener = async (_: string): Promise<void> => { };
 
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},

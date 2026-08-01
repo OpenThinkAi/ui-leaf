@@ -143,6 +143,7 @@ describe("openInAppMode resilience + launch-args contract", () => {
     'mount survives a fake Chromium launcher that emits "error" after spawn (ui-leaf#54)',
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -176,6 +177,7 @@ describe("openInAppMode resilience + launch-args contract", () => {
     "direct-spawns the Chromium binary (not via launcher shim) with the expected launch args",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -238,6 +240,7 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
       ];
 
       const srv = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -288,6 +291,7 @@ describe("Chrome lifecycle: kill-on-unmount + minimize-safety", () => {
     "heartbeat timeout does NOT signal the Chrome process (minimize-safety invariant)",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -360,6 +364,7 @@ describe("persistent profile (ui-leaf#63)", () => {
       expect(existsSync(profileDir)).toBe(false);
 
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -389,6 +394,7 @@ describe("persistent profile (ui-leaf#63)", () => {
     "does NOT delete the profile dir on unmount (session persists across launches)",
     async () => {
       const srv = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -422,6 +428,7 @@ describe("window position (ui-leaf#65)", () => {
     "passes --window-position=X,Y through to the Chromium launch args",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -450,6 +457,7 @@ describe("remote-debugging port (ui-leaf#66)", () => {
     "passes --remote-debugging-port + loopback address through to the launch args",
     async () => {
       server = await startDevServer({
+        _env: {},
         view: "trivial",
         viewsRoot: VIEWS_ROOT,
         data: {},
@@ -503,6 +511,7 @@ describe("load extensions (ui-leaf#64)", () => {
 
       try {
         server = await startDevServer({
+          _env: {},
           view: "trivial",
           viewsRoot: VIEWS_ROOT,
           data: {},

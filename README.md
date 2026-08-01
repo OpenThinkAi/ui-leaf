@@ -269,6 +269,28 @@ For the full field-by-field reference — including every message type, all opti
   every launch. Omit it (the default) for a throwaway profile. Ignored in tab mode; use
   a distinct `dir` per concurrent app-mode mount.
 
+### Remote / SSH sessions (`UI_LEAF_NO_OPEN`)
+
+Launching a browser only makes sense on a desktop someone is looking at. When a
+mount runs inside an SSH session (`SSH_CONNECTION`/`SSH_TTY` set), ui-leaf skips
+the launch automatically and instead prints the full launch URL — **including
+the `#token=` fragment** — to stderr, plus an `ssh -L` tunnel hint. Without the
+fragment the page renders its embedded snapshot but every authed endpoint
+(`/mutate`, `/events`, `/api/data`, `/heartbeat`) answers 401, so always copy
+the whole URL. The server itself stays loopback-bound; reach it from another
+device via SSH port forwarding:
+
+```sh
+ssh -L 5810:127.0.0.1:5810 you@host   # then open the printed URL on this device
+```
+
+The same behavior is available anywhere by setting `UI_LEAF_NO_OPEN=1`
+(any value but `0`/`false`/`no`), and `UI_LEAF_NO_OPEN=0` forces a launch even
+under SSH (e.g. when screen-sharing the remote desktop). Consumer CLIs need no
+changes: the env var is read by the mount itself, and the notice goes to stderr,
+which spawning CLIs typically inherit. Explicit `openBrowser: false` is
+different — it means the caller owns the UX, so nothing is printed.
+
 ## JS wrapper API
 
 The `@openthink/ui-leaf` package wraps the binary's stdio protocol in an
@@ -309,7 +331,7 @@ the rejection's `cause` carries the binary's exit reason.
 | `mutations` | `Record<string, (args) => Promise<unknown>>` | `{}` | Map of named mutation handlers the view is allowed to call. Keys are declared to the binary as the allowed-mutation list; unknown names return 404. |
 | `title` | `string` | `"ui-leaf"` | Browser tab title. |
 | `port` | `number` | `5810` | TCP port to bind. Auto-bumps if busy; the bound port is reflected on `view.port`/`view.url`. Pass `0` to let the OS pick. |
-| `openBrowser` | `boolean` | `true` | Open the browser when ready. Set `false` for headless / smoke-test use; the URL is still available on `view.url`. |
+| `openBrowser` | `boolean` | `true` | Open the browser when ready. Set `false` for headless / smoke-test use; the URL is still available on `view.url`. Even when `true`, the launch is suppressed by `UI_LEAF_NO_OPEN` or an SSH session (the tokened URL is printed to stderr instead — see [Remote / SSH sessions](#remote--ssh-sessions-ui_leaf_no_open)). |
 | `shell` | `"tab"` \| `"app"` | `"tab"` | `"tab"` opens in the user's default browser. `"app"` tries Chromium's `--app` mode (Chrome / Edge / Brave) for a chromeless window; falls back to `"tab"` on Safari, Firefox, or if no Chromium is installed. |
 | `windowSize` | `{ width: number; height: number }` | _none_ | Initial Chrome window size in CSS pixels for `shell: "app"`. Ignored in `"tab"` mode. |
 | `windowPosition` | `{ x: number; y: number }` | _none_ | Initial Chrome window position in screen CSS pixels for `shell: "app"` (`--window-position=x,y`). Pairs with `windowSize` for tiled / second-screen layouts; coordinates may be negative on multi-monitor setups. Ignored in `"tab"` mode. |
