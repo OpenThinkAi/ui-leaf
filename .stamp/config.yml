@@ -14,6 +14,14 @@ branches:
     #               and wrapper-via-source round-trips. Host-only; the post-
     #               publish `.github/workflows/smoke.yml` matrix keeps the
     #               cross-platform coverage as defense-in-depth.
+    #   build-wrapper — `bun run build:wrapper` (tsup + DTS pass for the npm
+    #               package), the same step publish.yml runs before `npm
+    #               publish`. Smoke drives the wrapper from source, so without
+    #               this a toolchain change that breaks tsup's DTS emit (e.g. a
+    #               TypeScript major bump) could merge and only fail at publish.
+    #               `build:binaries` (release job) is deliberately not gated:
+    #               smoke already compiles the host-platform binary, and the
+    #               full five-target cross-compile is too slow for every merge.
     required_checks:
       - name: typecheck
         run: bun run typecheck
@@ -23,6 +31,8 @@ branches:
         run: bun test
       - name: smoke
         run: bun run scripts/smoke-presubmit.ts
+      - name: build-wrapper
+        run: bun run build:wrapper
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md
