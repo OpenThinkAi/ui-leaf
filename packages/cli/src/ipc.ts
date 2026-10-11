@@ -24,7 +24,9 @@ export type OutboundMutate = {
   args: unknown;
 };
 
-export type CloseReason = "caller" | "signal" | "error";
+// "browser": the shell:"app" Chrome the mount launched exited or its last
+// window closed (ui-leaf#101).
+export type CloseReason = "caller" | "signal" | "error" | "browser";
 
 export type OutboundDisconnected = {
   version: ProtocolVersion;

@@ -274,8 +274,8 @@ export interface MountedView {
   port: number;
   /** Resolves with the close reason when the mount terminates. */
   closed: Promise<CloseReason>;
-  /** Force-close the dev server early. */
-  close: () => Promise<void>;
+  /** Force-close the dev server early. `reason` defaults to "caller". */
+  close: (reason?: CloseReason) => Promise<void>;
   /**
    * Replace in-memory data and notify all `data-updated` listeners.
    * Preserves in-page React state — no recompile.
@@ -314,9 +314,10 @@ export interface MountedView {
  * **Lifecycle.** Browser tab close (heartbeat silence) emits a `disconnected`
  * event on `result` but does NOT resolve `closed` or stop the server. The
  * mount only terminates — and `closed` resolves — when you call
- * `result.close()`, receive SIGINT/SIGTERM, or an internal error occurs.
- * Listen for `disconnected` and call `result.close()` yourself if you want
- * fast shutdown on tab close.
+ * `result.close()`, receive SIGINT/SIGTERM, or an internal error occurs —
+ * or, in `shell: "app"`, when the launched Chrome exits or its last window
+ * closes (reason `"browser"`, ui-leaf#101). Listen for `disconnected` and
+ * call `result.close()` yourself if you want fast shutdown on tab close.
  *
  * **Multi-tab note.** The heartbeat is a single high-water mark across all
  * open tabs; `disconnected` fires only when all tabs go silent. Closing one
@@ -374,7 +375,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
         url: server.url,
         port: server.port,
         closed: Promise.resolve<CloseReason>("caller"),
-        close: () => server.close(),
+        close: (reason?: CloseReason) => server.close(reason),
         update: server.update.bind(server),
         swapView: (source: string) => server.swapView(source),
         patch: (data: unknown, source: string) => server.patch(data, source),
@@ -399,7 +400,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     url: server.url,
     port: server.port,
     closed,
-    close: () => server.close(),
+    close: (reason?: CloseReason) => server.close(reason),
     update: server.update.bind(server),
     swapView: (source: string) => server.swapView(source),
     patch: (data: unknown, source: string) => server.patch(data, source),

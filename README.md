@@ -185,8 +185,9 @@ console.log(`view ready at ${view.url}`);
 // Push updated data to connected browsers (fire-and-forget).
 await view.update({ data: { initialCount: count } });
 
-// Wait for the binary to close (browser tab closed or view.close() called).
-// `reason` is "caller" | "signal" | "error".
+// Wait for the binary to close (view.close() called, a signal, an error, or —
+// with shell: "app" — the app window/Chrome going away).
+// `reason` is "caller" | "signal" | "error" | "browser".
 const { reason } = await view.closed;
 ```
 
@@ -240,10 +241,11 @@ number if you need a fixed port (e.g. for an OS-registered URL handler).
 | `{"version":"1","type":"disconnected"}` | Browser tab closed; mount stays alive |
 | `{"version":"1","type":"reconnected"}` | Browser tab re-opened |
 | `{"version":"1","type":"view-swapped"}` | View recompile succeeded (follows `view` or `patch`) |
-| `{"version":"1","type":"closed","reason":"caller\|signal\|error"}` | Mount terminated — emitted once, last |
+| `{"version":"1","type":"closed","reason":"caller\|signal\|error\|browser"}` | Mount terminated — emitted once, last. `browser`: the `shell: "app"` Chrome exited or its last window closed |
 | `{"version":"1","type":"error","phase":"build\|runtime","message":"..."}` | Build error (non-fatal) or runtime error (fatal) |
 
-The binary exits 0 after `closed`, 1 on internal error.
+The binary exits 0 after `closed`, 1 on internal error. It also closes itself (reason
+`signal`) if its parent process dies, even when stdin is never closed.
 
 For the full field-by-field reference — including every message type, all optional fields, and SSE event payloads — see [`docs/ipc-protocol.md`](./docs/ipc-protocol.md).
 
@@ -332,12 +334,12 @@ the rejection's `cause` carries the binary's exit reason.
 | `title` | `string` | `"ui-leaf"` | Browser tab title. |
 | `port` | `number` | `5810` | TCP port to bind. Auto-bumps if busy; the bound port is reflected on `view.port`/`view.url`. Pass `0` to let the OS pick. |
 | `openBrowser` | `boolean` | `true` | Open the browser when ready. Set `false` for headless / smoke-test use; the URL is still available on `view.url`. Even when `true`, the launch is suppressed by `UI_LEAF_NO_OPEN` or an SSH session (the tokened URL is printed to stderr instead — see [Remote / SSH sessions](#remote--ssh-sessions-ui_leaf_no_open)). |
-| `shell` | `"tab"` \| `"app"` | `"tab"` | `"tab"` opens in the user's default browser. `"app"` tries Chromium's `--app` mode (Chrome / Edge / Brave) for a chromeless window; falls back to `"tab"` on Safari, Firefox, or if no Chromium is installed. |
+| `shell` | `"tab"` \| `"app"` | `"tab"` | `"tab"` opens in the user's default browser. `"app"` tries Chromium's `--app` mode (Chrome / Edge / Brave) for a chromeless window; falls back to `"tab"` on Safari, Firefox, or if no Chromium is installed. In `"app"` mode the mount owns that Chrome: when it exits, or its last window closes (Chrome lingering with no windows on macOS), ui-leaf quits it and `closed` resolves with `"browser"`. |
 | `windowSize` | `{ width: number; height: number }` | _none_ | Initial Chrome window size in CSS pixels for `shell: "app"`. Ignored in `"tab"` mode. |
 | `windowPosition` | `{ x: number; y: number }` | _none_ | Initial Chrome window position in screen CSS pixels for `shell: "app"` (`--window-position=x,y`). Pairs with `windowSize` for tiled / second-screen layouts; coordinates may be negative on multi-monitor setups. Ignored in `"tab"` mode. |
 | `extensions` | `string[]` | _none_ | Absolute paths to unpacked Chrome extension dirs to load into the `shell: "app"` window (`--load-extension` + `--disable-extensions-except`), e.g. a content-script overlay on a third-party page. Dirs that don't exist are skipped with a stderr warning. Ignored in `"tab"` mode. **Note:** Chrome 149+ disabled `--load-extension` from the command line — use `debugPort` (CDP) to augment pages on current Chrome. |
 | `debugPort` | `number` | _none_ | Opt-in remote-debugging port for `shell: "app"` (`--remote-debugging-port=<n>`, bound to `127.0.0.1`) so a host process can attach over the Chrome DevTools Protocol — e.g. inject an overlay onto a page you don't control via `Page.addScriptToEvaluateOnNewDocument` / `Runtime.evaluate`. Integer 1–65535; loopback-only. If the port is already in use, Chrome launches but may fail to bind the endpoint — pick a free port. Ignored in `"tab"` mode. |
-| `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount. Ignored in `"tab"` mode. |
+| `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount (a second launch on a busy `dir` hands off to the running Chrome and exits, which closes that mount with reason `"browser"`). Ignored in `"tab"` mode. |
 | `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |
 | `heartbeatTimeoutMs` | `number` | `15000` | Browser silence (ms) after which `disconnected` fires (3× the page's 5s heartbeat, so one late/clamped beat never flaps). Does **not** terminate the mount — only signals. Raise to `>= 65000` for windows kept hidden/minimized > 5 min (Chrome intensive timer throttling). |
@@ -362,7 +364,7 @@ The object resolved by `mount()` is a live handle on the running mount.
 | `onDisconnect(handler)` | `void` | Register a handler fired when the browser tab disconnects. May fire multiple times if `reopen()` is used. |
 | `onReconnect(handler)` | `void` | Register a handler fired when the browser tab reconnects. |
 | `onError(handler)` | `void` | Register a handler for structured error events (`{ phase?, message }`). Build errors are non-fatal; runtime errors are fatal and precede `closed`. |
-| `closed` | `Promise<{ reason: string }>` | Resolves when the binary closes, never rejects. `reason` is one of `"caller"` \| `"signal"` \| `"error"`. |
+| `closed` | `Promise<{ reason: string }>` | Resolves when the binary closes, never rejects. `reason` is one of `"caller"` \| `"signal"` \| `"error"` \| `"browser"` (`shell: "app"`: the launched Chrome exited, or its last window closed and ui-leaf quit that Chrome). |
 | `close()` | `Promise<void>` | Send `{type:"close"}` and await the `closed` event. Idempotent. |
 
 ### Worked example: spend tracker
