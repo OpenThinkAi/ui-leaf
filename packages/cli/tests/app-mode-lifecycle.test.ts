@@ -109,7 +109,8 @@ afterEach(async () => {
   process.kill = ORIGINAL_PROCESS_KILL;
 });
 
-async function mountApp(appWatch: Record<string, number> = {}): Promise<Srv> {
+type AppWatch = NonNullable<Parameters<typeof startDevServer>[0]["_appWatch"]>;
+async function mountApp(appWatch: AppWatch = {}): Promise<Srv> {
   server = await startDevServer({
     _env: {},
     view: "trivial",

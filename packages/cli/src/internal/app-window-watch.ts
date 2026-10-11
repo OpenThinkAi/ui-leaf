@@ -33,8 +33,20 @@ export interface AppWindowWatchOptions {
   now?: () => number;
 }
 
+/** One CDP round-trip a second: cheap, and fast enough to feel immediate. */
 export const DEFAULT_APP_WATCH_INTERVAL_MS = 1000;
+/**
+ * Zero pages must persist this long before Chrome is quit. Long enough to
+ * ride out a transient zero (a window being replaced, a slow probe), short
+ * enough that a closed window releases its profile promptly. Matches the
+ * sportsing workaround this replaces.
+ */
 export const DEFAULT_APP_EMPTY_GRACE_MS = 3000;
+/**
+ * Before the first page is ever seen, wait this long instead: a cold Chrome
+ * start on a fresh or large persistent profile can take several seconds to
+ * create its first window, and quitting it mid-launch would look like a crash.
+ */
 export const DEFAULT_APP_LAUNCH_GRACE_MS = 15_000;
 
 export function watchAppWindows(opts: AppWindowWatchOptions): { stop: () => void } {

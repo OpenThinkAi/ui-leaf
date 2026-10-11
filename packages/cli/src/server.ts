@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto
 import { constants as fsConstants } from "node:fs";
 import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { delimiter, join } from "node:path";
 import open from "open";
 import { compileView, compileSource, assembleHtml } from "./compile.js";
@@ -1342,15 +1343,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     // pipe (when the launch opened one) and close the mount once the last
     // tracked Chrome has exited.
     const trackAppWindow = (child: ChildProcess): void => {
-      const pipeOut = child.stdio?.[3] as NodeJS.WritableStream | null | undefined;
-      const pipeIn = child.stdio?.[4] as NodeJS.ReadableStream | null | undefined;
+      // ChildProcess types extra stdio slots as the generic stream union;
+      // with stdio "pipe" at 3/4 they are a writable and a readable socket.
+      const pipeOut = child.stdio?.[3] as Writable | null | undefined;
+      const pipeIn = child.stdio?.[4] as Readable | null | undefined;
       let pipe: CdpPipeClient | null = null;
       let watcher: { stop: () => void } | null = null;
       if (pipeOut && pipeIn) {
-        pipe = createCdpPipeClient(
-          pipeOut as unknown as import("node:stream").Writable,
-          pipeIn as unknown as import("node:stream").Readable,
-        );
+        pipe = createCdpPipeClient(pipeOut, pipeIn);
         // Like child.unref(): an idle pipe must not keep the host alive.
         (pipeOut as { unref?: () => void }).unref?.();
         (pipeIn as { unref?: () => void }).unref?.();

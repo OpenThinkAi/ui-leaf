@@ -12,6 +12,7 @@ import {
   type Shell,
 } from "./server.js";
 import type { BuildError } from "./compile.js";
+import { registerCloseWithReason } from "./internal/close-with-reason.js";
 
 export type { BuildError, CloseReason, CspOption, DevServerEvent, DevServerEventListener, MutationHandler, Shell };
 
@@ -274,8 +275,8 @@ export interface MountedView {
   port: number;
   /** Resolves with the close reason when the mount terminates. */
   closed: Promise<CloseReason>;
-  /** Force-close the dev server early. `reason` defaults to "caller". */
-  close: (reason?: CloseReason) => Promise<void>;
+  /** Force-close the dev server early. */
+  close: () => Promise<void>;
   /**
    * Replace in-memory data and notify all `data-updated` listeners.
    * Preserves in-page React state — no recompile.
@@ -375,7 +376,7 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
         url: server.url,
         port: server.port,
         closed: Promise.resolve<CloseReason>("caller"),
-        close: (reason?: CloseReason) => server.close(reason),
+        close: () => server.close(),
         update: server.update.bind(server),
         swapView: (source: string) => server.swapView(source),
         patch: (data: unknown, source: string) => server.patch(data, source),
@@ -396,11 +397,11 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     process.off("SIGTERM", sigterm);
   });
 
-  return {
+  const view: MountedView = {
     url: server.url,
     port: server.port,
     closed,
-    close: (reason?: CloseReason) => server.close(reason),
+    close: () => server.close(),
     update: server.update.bind(server),
     swapView: (source: string) => server.swapView(source),
     patch: (data: unknown, source: string) => server.patch(data, source),
@@ -408,4 +409,6 @@ export async function mount(opts: MountOptions): Promise<MountedView> {
     on: server.on.bind(server),
     off: server.off.bind(server),
   };
+  registerCloseWithReason(view, (reason) => server.close(reason));
+  return view;
 }

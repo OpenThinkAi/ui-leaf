@@ -25,6 +25,7 @@ changes that have landed on `main` but are not yet released.
 ### Changed
 
 - `closed` / `{type:"closed"}` / the `closing` SSE event can carry
-  `reason: "browser"`. Callers that switch on the reason should handle it; the
-  binary exits 0 for it.
-- The in-process `mount()` handle's `close()` accepts an optional reason.
+  `reason: "browser"`; the binary exits 0 for it. This widens the exported
+  `CloseReason` union, so release it as a **minor** bump: TypeScript callers
+  with an exhaustive switch (`default: assertNever(reason)`) need a
+  `"browser"` arm.

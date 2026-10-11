@@ -82,6 +82,7 @@ import {
 } from "./ipc.js";
 import { createViewOpQueue } from "./internal/view-op-queue.js";
 import { watchParent } from "./internal/parent-watch.js";
+import { closeWithReason } from "./internal/close-with-reason.js";
 
 // Upper bound on teardown once the parent is gone (stdin EOF or reparent).
 // cleanup() normally finishes in milliseconds; if it ever wedges (a stuck
@@ -365,10 +366,14 @@ async function runMount(): Promise<void> {
 
   // Parent gone: tear the mount down, and make sure the process actually
   // exits even if teardown wedges.
+  // Both stdin EOF and the parent-pid watch can fire; act on the first.
+  let parentLossHandled = false;
   const onParentLoss = (reason: "caller" | "signal"): void => {
+    if (parentLossHandled) return;
+    parentLossHandled = true;
     const deadline = setTimeout(() => process.exit(0), PARENT_LOSS_EXIT_DEADLINE_MS);
     deadline.unref?.();
-    if (mountedView) void mountedView.close(reason);
+    if (mountedView) void closeWithReason(mountedView, reason);
   };
 
   // Stdin EOF is the usual "parent went away" signal, but it never arrives
@@ -453,7 +458,7 @@ async function runMount(): Promise<void> {
     // If stdin closed — or the caller sent `close` — while we were waiting
     // on mount(), tear down right away rather than hold the dev server open.
     if (parentLost) {
-      void view.close("signal");
+      void closeWithReason(view, "signal");
     } else if (stdinClosed || preReadyCloseRequested) {
       void view.close();
     }

@@ -27,6 +27,9 @@ export interface CdpPipeClient {
 }
 
 const DEFAULT_CALL_TIMEOUT_MS = 2000;
+// Defence in depth: a frame this large without a NUL means the stream is
+// not CDP (or is wedged); drop the pipe rather than buffer without bound.
+const MAX_BUFFERED_CHARS = 8 * 1024 * 1024;
 
 type Pending = {
   resolve: (v: unknown) => void;
@@ -57,6 +60,11 @@ export function createCdpPipeClient(writable: Writable, readable: Readable): Cdp
   readable.setEncoding?.("utf8");
   readable.on("data", (chunk: string | Buffer) => {
     buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    if (buffer.length > MAX_BUFFERED_CHARS && buffer.indexOf("\0") === -1) {
+      buffer = "";
+      markClosed();
+      return;
+    }
     let nul: number;
     while ((nul = buffer.indexOf("\0")) !== -1) {
       const frame = buffer.slice(0, nul);

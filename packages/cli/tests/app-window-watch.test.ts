@@ -175,6 +175,15 @@ describe("createCdpPipeClient", () => {
     await expect(client.call("X.z")).rejects.toThrow("closed");
   });
 
+  test("an oversized frame with no NUL closes the pipe instead of buffering forever", async () => {
+    const { toChrome, fromChrome } = fakePipe(() => undefined);
+    const client = createCdpPipeClient(toChrome, fromChrome);
+    const pending = client.call("X.y", {}, 5000);
+    fromChrome.write("x".repeat(9 * 1024 * 1024));
+    await expect(pending).rejects.toThrow("closed");
+    expect(client.closed).toBe(true);
+  });
+
   test("countPageTargets counts only page targets, null on failure", async () => {
     const { toChrome, fromChrome } = fakePipe((m) => ({
       id: m.id,
