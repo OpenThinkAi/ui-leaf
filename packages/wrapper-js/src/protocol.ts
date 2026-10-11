@@ -26,7 +26,9 @@ export type OutboundMutate = {
   args: unknown;
 };
 
-export type CloseReason = "caller" | "signal" | "error";
+// "browser": the shell:"app" Chrome the mount launched exited or its last
+// window closed (ui-leaf#101).
+export type CloseReason = "caller" | "signal" | "error" | "browser";
 
 export type OutboundDisconnected = {
   version: ProtocolVersion;
@@ -206,7 +208,7 @@ export type ExitInfo = {
   /** Process exit code; null if the child was killed by a signal. */
   code: number | null;
   /**
-   * `caller` / `signal` / `error` come from the binary's `closed` event when
+   * `caller` / `signal` / `error` / `browser` come from the binary's `closed` event when
    * one was observed. `killed` means the wrapper sent SIGTERM/SIGKILL via
    * `.kill()`. `unknown` covers exits without a `closed` event (crash, etc).
    */

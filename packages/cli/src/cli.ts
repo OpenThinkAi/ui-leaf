@@ -22,7 +22,7 @@
 //     {"version":"1","type":"mutate","id":<n>,"name":"<s>","args":<any>}
 //     {"version":"1","type":"disconnected"}
 //     {"version":"1","type":"reconnected"}
-//     {"version":"1","type":"closed","reason":"caller"|"signal"|"error"}
+//     {"version":"1","type":"closed","reason":"caller"|"signal"|"error"|"browser"}
 //     {"version":"1","type":"error","message":"<text>"}
 //     {"version":"1","type":"error","phase":"build","message":"<text>"}
 //
@@ -61,9 +61,13 @@
 //   Lifecycle
 //     disconnected: browser tab heartbeat stopped; mount stays alive.
 //     reconnected:  browser reconnected after a disconnect.
-//     closed:       mount terminated; reason is caller|signal|error.
-//     Exits 0 on closed with reason caller|signal; exits 1 on error.
+//     closed:       mount terminated; reason is caller|signal|error|browser.
+//                   "browser" = the shell:"app" Chrome exited or its last
+//                   window closed (ui-leaf#101).
+//     Exits 0 on closed with reason caller|signal|browser; exits 1 on error.
 //     Closing stdin from the parent triggers a caller close (exit 0).
+//     If the parent process dies without closing stdin (the binary gets
+//     reparented), the mount closes with reason "signal" (ui-leaf#101).
 
 import { createInterface } from "node:readline";
 import { mount, type MountOptions } from "./index.js";
@@ -77,6 +81,14 @@ import {
   type OutboundEvent,
 } from "./ipc.js";
 import { createViewOpQueue } from "./internal/view-op-queue.js";
+import { watchParent } from "./internal/parent-watch.js";
+import { closeWithReason } from "./internal/close-with-reason.js";
+
+// Upper bound on teardown once the parent is gone (stdin EOF or reparent).
+// cleanup() normally finishes in milliseconds; if it ever wedges (a stuck
+// graceful server stop), exit anyway rather than orphan for days. Chrome
+// still goes down with us: its CDP pipe disconnects when this process exits.
+const PARENT_LOSS_EXIT_DEADLINE_MS = 5000;
 
 // Capture the real stdout write BEFORE anything (especially mount() with
 // silent: true) gets a chance to redirect process.stdout. The binary's
@@ -352,6 +364,32 @@ async function runMount(): Promise<void> {
     }
   });
 
+  // Parent gone: tear the mount down, and make sure the process actually
+  // exits even if teardown wedges.
+  // Both stdin EOF and the parent-pid watch can fire; act on the first.
+  let parentLossHandled = false;
+  const onParentLoss = (reason: "caller" | "signal"): void => {
+    if (parentLossHandled) return;
+    parentLossHandled = true;
+    const deadline = setTimeout(() => process.exit(0), PARENT_LOSS_EXIT_DEADLINE_MS);
+    deadline.unref?.();
+    if (mountedView) void closeWithReason(mountedView, reason);
+  };
+
+  // Stdin EOF is the usual "parent went away" signal, but it never arrives
+  // while another process still holds our stdin's write end. A parent-pid
+  // change (we were reparented to init/launchd) catches that case.
+  let parentLost = false;
+  watchParent({
+    onParentGone: () => {
+      parentLost = true;
+      if (!configReceived) {
+        process.exit(1);
+      }
+      onParentLoss("signal");
+    },
+  });
+
   rl.on("close", () => {
     stdinClosed = true;
     // Reject any pending mutations — the parent isn't going to respond.
@@ -368,9 +406,7 @@ async function runMount(): Promise<void> {
     // Otherwise, tear down the mounted view (if it exists yet) so the
     // process exits without waiting on the heartbeat timeout. The
     // view.closed promise resolves and runMount's normal exit path runs.
-    if (mountedView) {
-      void mountedView.close();
-    }
+    onParentLoss("caller");
   });
 
   const config = await configPromise;
@@ -421,7 +457,9 @@ async function runMount(): Promise<void> {
     }
     // If stdin closed — or the caller sent `close` — while we were waiting
     // on mount(), tear down right away rather than hold the dev server open.
-    if (stdinClosed || preReadyCloseRequested) {
+    if (parentLost) {
+      void closeWithReason(view, "signal");
+    } else if (stdinClosed || preReadyCloseRequested) {
       void view.close();
     }
     view.on("disconnected", () => emit({ type: "disconnected" }));

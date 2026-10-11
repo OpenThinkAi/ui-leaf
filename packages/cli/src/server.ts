@@ -3,10 +3,13 @@ import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto
 import { constants as fsConstants } from "node:fs";
 import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { delimiter, join } from "node:path";
 import open from "open";
 import { compileView, compileSource, assembleHtml } from "./compile.js";
 import type { CloseReason } from "./ipc.js";
+import { countPageTargets, createCdpPipeClient, type CdpPipeClient } from "./internal/cdp-pipe.js";
+import { watchAppWindows } from "./internal/app-window-watch.js";
 
 // Module-level stdout redirect state. Captured ONCE at module load so
 // concurrent silent: true mounts share the same "original" reference and
@@ -462,10 +465,23 @@ async function openInAppMode(
     // Teardown signals the spawned process tree (descendants of this pid),
     // not the process group — see killChromeTree (ui-leaf#67). Windows
     // ignores `detached` for SIGTERM purposes — cleanup() uses `taskkill /T`.
-    const child = spawnImpl(binPath, launchArgs, {
-      detached: true,
-      stdio: "ignore",
-    });
+    //
+    // POSIX: also open a CDP control pipe (`--remote-debugging-pipe`, fds 3
+    // and 4) so the mount can see when the last app window closes while
+    // Chrome lingers (macOS), and so Chrome shuts itself down if this process
+    // dies without running cleanup (ui-leaf#101). The pipe is private to this
+    // process — unlike debugPort, nothing listens on the network. Windows
+    // keeps the plain launch: there, closing the last window exits Chrome,
+    // which the child's exit event already reports.
+    const usePipe = process.platform !== "win32";
+    const child = spawnImpl(
+      binPath,
+      usePipe ? [...launchArgs, "--remote-debugging-pipe"] : launchArgs,
+      {
+        detached: true,
+        stdio: usePipe ? ["ignore", "ignore", "ignore", "pipe", "pipe"] : "ignore",
+      },
+    );
     attachLauncherErrorListener(child, binPath);
     // unref so a still-running Chrome doesn't keep the host's event loop
     // alive after the server closes. We retain the JS reference for the
@@ -549,13 +565,14 @@ export function collectDescendantPids(
  * `taskkill /T` tree semantics).
  *
  * **INVARIANT**: this is only ever called from startDevServer's
- * cleanup() — never from the heartbeat watcher / `disconnected` event.
- * A minimized window must keep the Chrome process alive (heartbeats can
- * pause indefinitely while minimized; killing on that signal would close
- * the window the user is intentionally hiding). The only legitimate kill
- * triggers are explicit unmount (caller invoked `close()`), process
- * shutdown, or an unrecoverable server error — all of which route
- * through cleanup().
+ * cleanup() or quitEmptyApp() — never from the heartbeat watcher /
+ * `disconnected` event. A minimized window must keep the Chrome process
+ * alive (heartbeats can pause indefinitely while minimized; killing on that
+ * signal would close the window the user is intentionally hiding). The only
+ * legitimate kill triggers are explicit unmount (caller invoked `close()`),
+ * process shutdown, an unrecoverable server error — all of which route
+ * through cleanup() — and CDP reporting that the Chrome has no page targets
+ * left (ui-leaf#101), which a minimized window never does.
  */
 function killChromeTree(
   child: ChildProcess,
@@ -808,6 +825,18 @@ export interface DevServerOptions {
    */
   _listProcesses?: () => ProcessInfo[];
   /**
+   * Test seam: timings for the shell:"app" window watcher (ui-leaf#101) and
+   * the grace period between asking an empty Chrome to quit over CDP and
+   * signalling it. Defaults: 1000ms poll, 3000ms empty grace, 15000ms launch
+   * grace, 5000ms quit grace. Never set this in production.
+   */
+  _appWatch?: {
+    intervalMs?: number;
+    emptyGraceMs?: number;
+    launchGraceMs?: number;
+    quitGraceMs?: number;
+  };
+  /**
    * Test seam: environment consulted by {@link resolveOpenSuppression}.
    * Defaults to `process.env`. Tests that assert on browser-open behavior
    * must pass `{}` (or a crafted env) so a developer's real SSH session /
@@ -946,6 +975,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     _spawn: spawnImpl = spawn,
     _fsAccess: fsAccessImpl = access,
     _listProcesses: listProcessesImpl = defaultListProcesses,
+    _appWatch: appWatchOpts = {},
     _env = process.env as Record<string, string | undefined>,
   } = opts;
   const cspHeader = resolveCsp(csp);
@@ -1173,11 +1203,21 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     // window when the host CLI exits, and they pile up across sessions.
     // Children are added by the launch path below and removed on their
     // own 'exit' (so a user-closed window doesn't stay in the set
-    // indefinitely). cleanup() iterates and signals the survivors.
-    // INVARIANT: nothing outside cleanup() may kill these. The heartbeat
-    // watcher must never reach into this set — a minimized window pauses
-    // heartbeats and would be killed under the user's feet otherwise.
-    const trackedAppWindows = new Set<ChildProcess>();
+    // indefinitely). cleanup() iterates and signals the survivors. Each
+    // entry maps to a disposer that stops that child's window watcher and
+    // releases its CDP pipe.
+    //
+    // When the last tracked child exits — for any reason: the user quit
+    // Chrome, it crashed, it was signalled — the mount closes with reason
+    // "browser" (ui-leaf#101). Without that, `closed` never resolved and
+    // the caller blocked forever on a mount with no window.
+    //
+    // INVARIANT: the heartbeat watcher must never reach into this set — a
+    // minimized window pauses heartbeats and would be killed under the
+    // user's feet otherwise. The only paths that end a tracked Chrome are
+    // cleanup() and quitEmptyApp(), and the latter fires solely on CDP
+    // reporting zero page targets (a minimized window keeps its target).
+    const trackedAppWindows = new Map<ChildProcess, () => void>();
 
     const cleanup = async (reason: CloseReason): Promise<void> => {
       if (closeRequested) return;
@@ -1191,7 +1231,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       // Tear down any --app windows we spawned. Done before bunServer.stop
       // so the window closes promptly even if the graceful HTTP shutdown
       // is slow (or stuck on a hung in-flight request).
-      for (const child of trackedAppWindows) {
+      for (const [child, dispose] of trackedAppWindows) {
+        dispose();
         killChromeTree(child, spawnImpl, listProcessesImpl);
       }
       trackedAppWindows.clear();
@@ -1278,6 +1319,66 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       );
     };
 
+    // Ask a Chrome whose windows are all gone to quit (ui-leaf#101). Graceful
+    // first — `Browser.close` over the private CDP pipe, so a persistent
+    // profile flushes its session state — then, if it hasn't exited after
+    // quitGraceMs, the same descendant-scoped signal cleanup() uses. Never
+    // a process-group kill (ui-leaf#67). The child's exit event (wired in
+    // trackAppWindow) is what resolves `closed`.
+    const quitEmptyApp = (child: ChildProcess, pipe: CdpPipeClient): void => {
+      if (closeRequested) return;
+      void pipe.call("Browser.close").catch(() => {
+        /* already closing / pipe gone — the fallback below covers it */
+      });
+      const fallback = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          killChromeTree(child, spawnImpl, listProcessesImpl);
+        }
+      }, appWatchOpts.quitGraceMs ?? 5000);
+      (fallback as { unref?: () => void }).unref?.();
+      child.once("exit", () => clearTimeout(fallback));
+    };
+
+    // Register a launched app-mode Chrome: watch its windows over the CDP
+    // pipe (when the launch opened one) and close the mount once the last
+    // tracked Chrome has exited.
+    const trackAppWindow = (child: ChildProcess): void => {
+      // ChildProcess types extra stdio slots as the generic stream union;
+      // with stdio "pipe" at 3/4 they are a writable and a readable socket.
+      const pipeOut = child.stdio?.[3] as Writable | null | undefined;
+      const pipeIn = child.stdio?.[4] as Readable | null | undefined;
+      let pipe: CdpPipeClient | null = null;
+      let watcher: { stop: () => void } | null = null;
+      if (pipeOut && pipeIn) {
+        pipe = createCdpPipeClient(pipeOut, pipeIn);
+        // Like child.unref(): an idle pipe must not keep the host alive.
+        (pipeOut as { unref?: () => void }).unref?.();
+        (pipeIn as { unref?: () => void }).unref?.();
+        const client = pipe;
+        watcher = watchAppWindows({
+          countPages: () => countPageTargets(client),
+          onEmpty: () => quitEmptyApp(child, client),
+          intervalMs: appWatchOpts.intervalMs,
+          emptyGraceMs: appWatchOpts.emptyGraceMs,
+          launchGraceMs: appWatchOpts.launchGraceMs,
+        });
+      }
+      const dispose = (): void => {
+        watcher?.stop();
+        pipe?.close();
+      };
+      trackedAppWindows.set(child, dispose);
+      child.once("exit", () => {
+        dispose();
+        trackedAppWindows.delete(child);
+        // Last app window's Chrome is gone: nothing is left to show the
+        // view, so end the mount instead of blocking `closed` forever.
+        if (!closeRequested && trackedAppWindows.size === 0) {
+          void cleanup("browser");
+        }
+      });
+    };
+
     // Browser-launch implementation, or the test-seam override if one was supplied.
     const launchBrowser: () => Promise<void> = _opener
       ? () => _opener(openUrl)
@@ -1294,11 +1395,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
               fsAccessImpl,
             );
             if (child) {
-              trackedAppWindows.add(child);
-              // Drop the entry when Chrome exits on its own (user closed
-              // the window, helper crash, etc.). Keeps the set bounded and
-              // means cleanup() won't waste a signal on a dead PID.
-              child.once("exit", () => trackedAppWindows.delete(child));
+              trackAppWindow(child);
               return;
             }
             process.stderr.write(

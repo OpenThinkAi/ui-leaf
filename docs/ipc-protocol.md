@@ -388,7 +388,7 @@ Browser reconnected after a prior disconnected event.
 
 ### `closed`
 
-Mount terminated. The binary exits after emitting this message. Exit code is 0 for caller/signal, 1 for error.
+Mount terminated. The binary exits after emitting this message. Exit code is 0 for caller/signal/browser, 1 for error.
 
 **Example**
 
@@ -406,7 +406,7 @@ Mount terminated. The binary exits after emitting this message. Exit code is 0 f
 |---|---|:---:|---|---|
 | `version` | `"1"` (const) | ✓ | Protocol version literal. A new $id hosts future breaking versions. | — |
 | `type` | `"closed"` (const) | ✓ | Discriminant: mount closed. | — |
-| `reason` | `"caller"` \| `"signal"` \| `"error"` | ✓ | Why the mount closed: caller sent close, OS signal received, or unrecoverable error. | — |
+| `reason` | `"caller"` \| `"signal"` \| `"error"` \| `"browser"` | ✓ | Why the mount closed: caller sent close, OS signal received, unrecoverable error, or (shell:"app") the launched browser exited or its last window closed. | — |
 
 
 ### `error`
@@ -520,5 +520,5 @@ SSE event broadcast to all connected browser tabs immediately before the HTTP se
 | Field | Type | Req | Description | Constraints |
 |---|---|:---:|---|---|
 | `type` | `"closing"` (const) | ✓ | Discriminant: closing SSE event. | — |
-| `reason` | `"caller"` \| `"signal"` \| `"error"` | ✓ | Why the mount is closing: caller sent close, OS signal received, or unrecoverable error. | — |
+| `reason` | `"caller"` \| `"signal"` \| `"error"` \| `"browser"` | ✓ | Why the mount is closing: caller sent close, OS signal received, unrecoverable error, or (shell:"app") the launched browser exited or its last window closed. | — |
 
