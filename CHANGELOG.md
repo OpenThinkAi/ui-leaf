@@ -5,6 +5,8 @@ changes that have landed on `main` but are not yet released.
 
 ## Unreleased
 
+## 1.7.0 — 2026-10-11
+
 ### Fixed
 
 - **`shell: "app"` mounts now end when their Chrome goes away (#101).**
