@@ -20,7 +20,7 @@ const SENTINEL = path.join(BIN_DIR, ".ui-leaf-version");
 // by the tarball's npm provenance attestation. The checksums.txt asset on the
 // GitHub Release is NEVER consulted: release assets are mutable, and anyone
 // able to swap a binary there could swap its digest alongside it.
-export const PINNED_CHECKSUMS = path.join(PKG_ROOT, "checksums.txt");
+const PINNED_CHECKSUMS = path.join(PKG_ROOT, "checksums.txt");
 
 // Allow test suites to redirect downloads to a local HTTP server.
 const RELEASE_BASE =
@@ -286,7 +286,8 @@ async function main(): Promise<void> {
   } catch (err) {
     console.error(
       `ui-leaf: cannot read the pinned binary checksum: ${(err as Error).message}\n` +
-        "  The published package ships checksums.txt; its absence means a broken or tampered install.\n" +
+        `  The package's checksums.txt is missing or has no valid entry for ${target.artifact}.\n` +
+        "  Reinstall the package; if it persists, report it at https://github.com/OpenThinkAi/ui-leaf/issues\n" +
         "  Workaround: download and verify the binary manually and set UI_LEAF_BINARY_PATH=/path/to/ui-leaf"
     );
     process.exit(1);

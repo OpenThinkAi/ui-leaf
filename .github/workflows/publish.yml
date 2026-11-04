@@ -251,6 +251,8 @@ jobs:
           name: binaries
           path: ${{ runner.temp }}/binaries
 
+      # The artifact list here (and in the binaries upload and release
+      # files) must match PLATFORM_MAP in packages/wrapper-js/src/postinstall.ts.
       - name: Pin checksums into the package
         run: |
           set -euo pipefail

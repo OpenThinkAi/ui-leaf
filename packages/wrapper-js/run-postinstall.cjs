@@ -15,6 +15,8 @@ if (!existsSync(script)) {
 // has none, so there is nothing to verify a download against — skip instead
 // of failing `bun install`. A published package always carries it; there
 // postinstall.js fails closed if it is missing.
+// INVARIANT: this relies on `src` NOT being in package.json `files`. Adding
+// it would make published installs without checksums.txt skip silently.
 if (
   !process.env.UI_LEAF_BINARY_PATH &&
   !existsSync(join(__dirname, 'checksums.txt')) &&
