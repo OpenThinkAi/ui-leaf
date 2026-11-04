@@ -14,6 +14,14 @@ const PKG_ROOT = process.cwd();
 const BIN_DIR = path.join(PKG_ROOT, "bin");
 const SENTINEL = path.join(BIN_DIR, ".ui-leaf-version");
 
+// Expected binary digests, pinned into the npm tarball at publish time
+// (AGT-2352). The publish workflow copies the checksums.txt produced by the
+// binary build into the package before `npm pack`, so the digests are covered
+// by the tarball's npm provenance attestation. The checksums.txt asset on the
+// GitHub Release is NEVER consulted: release assets are mutable, and anyone
+// able to swap a binary there could swap its digest alongside it.
+export const PINNED_CHECKSUMS = path.join(PKG_ROOT, "checksums.txt");
+
 // Allow test suites to redirect downloads to a local HTTP server.
 const RELEASE_BASE =
   process.env["UI_LEAF_DOWNLOAD_BASE"] ??
@@ -128,26 +136,6 @@ function fetchUrl(
 }
 
 // ---------------------------------------------------------------------------
-// Fetch small text payload into memory (used for checksums.txt).
-// ---------------------------------------------------------------------------
-async function fetchText(url: string): Promise<string> {
-  const res = await fetchUrl(url);
-  if (res.statusCode !== 200) {
-    res.resume();
-    throw new Error(`ui-leaf: HTTP ${res.statusCode} for ${url}`);
-  }
-  return new Promise((resolve, reject) => {
-    let data = "";
-    res.setEncoding("utf8");
-    res.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    res.on("end", () => resolve(data));
-    res.on("error", reject);
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Stream binary to a temp file, computing sha256 in one pass.
 // ---------------------------------------------------------------------------
 async function downloadToTemp(url: string, tmpPath: string): Promise<string> {
@@ -212,6 +200,11 @@ export function parseChecksums(text: string, artifact: string): string {
   for (const line of text.split("\n")) {
     const parts = line.trim().split(/\s+/, 2);
     if (parts.length === 2 && parts[1] === artifact && parts[0]) {
+      if (!/^[0-9a-f]{64}$/.test(parts[0])) {
+        throw new Error(
+          `ui-leaf: malformed checksum entry for ${artifact} in checksums.txt`
+        );
+      }
       return parts[0];
     }
   }
@@ -280,22 +273,21 @@ async function main(): Promise<void> {
   }
 
   const tag = `v${version}`;
-  const checksumsUrl = `${RELEASE_BASE}/${tag}/checksums.txt`;
   const binaryUrl = `${RELEASE_BASE}/${tag}/${target.artifact}`;
   const binaryDest = path.join(BIN_DIR, target.binary);
   const tmpBinary = `${binaryDest}.tmp.${process.pid}`;
 
-  // 1. Fetch checksums.txt and extract the expected digest for our artifact.
-  console.log("ui-leaf: fetching checksums…");
+  // 1. Read the expected digest from the checksums.txt shipped inside this
+  //    package. Fail closed if it is missing or has no entry for our artifact.
   let expectedDigest: string;
   try {
-    const csText = await withRetry(() => fetchText(checksumsUrl), "fetch checksums");
+    const csText = await fsp.readFile(PINNED_CHECKSUMS, "utf8");
     expectedDigest = parseChecksums(csText, target.artifact);
   } catch (err) {
     console.error(
-      `ui-leaf: failed to fetch checksums: ${(err as Error).message}\n` +
-        "  If you're behind a proxy, Node's https.get does not read HTTPS_PROXY.\n" +
-        "  Workaround: download the binary manually and set UI_LEAF_BINARY_PATH=/path/to/ui-leaf"
+      `ui-leaf: cannot read the pinned binary checksum: ${(err as Error).message}\n` +
+        "  The published package ships checksums.txt; its absence means a broken or tampered install.\n" +
+        "  Workaround: download and verify the binary manually and set UI_LEAF_BINARY_PATH=/path/to/ui-leaf"
     );
     process.exit(1);
   }

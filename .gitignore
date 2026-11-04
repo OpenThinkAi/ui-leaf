@@ -32,3 +32,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Pinned binary digests — generated into the wrapper package by the publish workflow
+packages/wrapper-js/checksums.txt

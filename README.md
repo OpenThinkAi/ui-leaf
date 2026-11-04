@@ -85,7 +85,8 @@ grep ui-leaf-darwin-arm64 checksums.txt | shasum -a 256 -c -  \
 
 `npm install @openthink/ui-leaf` installs the thin JS wrapper; `postinstall`
 downloads and verifies the right binary for your platform automatically
-(SHA256 against the release's `checksums.txt`). API reference for the
+(SHA256 against the `checksums.txt` pinned inside the npm package at publish
+time, not the copy on the GitHub Release). API reference for the
 wrapper's `mount()` and `View` handle is in
 [JS wrapper API](#js-wrapper-api) below.
 

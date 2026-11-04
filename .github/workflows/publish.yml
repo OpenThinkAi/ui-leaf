@@ -1,10 +1,9 @@
 name: Publish to npm
 
 # Fires when commits land on main (including via the stamp server's
-# post-receive mirror). Splits into a `plan` job (reads package.json
-# version, checks npm) and two gated jobs — `publish` (npm) and `release`
-# (GH Release + binary artifacts) — both conditioned on plan.publishing.
-# Non-bump merges no-op with both jobs showing as Skipped.
+# post-receive mirror). A `plan` job reads the package.json version and
+# checks npm; every other job is gated on plan.publishing, so non-bump
+# merges no-op with them showing as Skipped.
 #
 # Auth: Trusted Publishing via OIDC. No NPM_TOKEN secret; the npm package
 # must have a Trusted Publisher configured on the npm side pointing at
@@ -12,34 +11,55 @@ name: Publish to npm
 # Publishers). --provenance attaches an SLSA build attestation to the
 # published tarball, verifiable via `npm audit signatures`.
 #
-# Manual re-run: `workflow_dispatch` re-publishes whatever's in
+# Job layout (least privilege per job; oaudit AGT-2352 / AGT-2354):
+#
+#   plan      contents: read   — version + registry check. No dependency code.
+#   binaries  contents: read   — installs deps (--ignore-scripts), cross-
+#                                compiles the five binaries + checksums.txt,
+#                                uploads them as an artifact.
+#   release   contents: write  — downloads that artifact and creates/updates
+#                                the GitHub Release. No install, no build:
+#                                no dependency code runs next to the write
+#                                token.
+#   package   contents: read   — installs deps (--ignore-scripts), typechecks,
+#                                builds the wrapper, copies the binaries'
+#                                checksums.txt INTO the package, packs the
+#                                tarball and uploads it.
+#   publish   id-token: write  — downloads the tarball and publishes it. No
+#                                checkout, no install, no lifecycle scripts:
+#                                nothing from the dependency tree runs while
+#                                ACTIONS_ID_TOKEN_REQUEST_* is in scope.
+#
+# Pinned checksums (AGT-2352): postinstall verifies the downloaded binary
+# against the checksums.txt shipped inside the npm tarball (covered by npm
+# provenance), never against the mutable release asset. That copy comes
+# from the same `binaries` artifact the release uploads, so the two always
+# agree. `publish` waits for `release`, so a version is never on npm before
+# its binaries are on the GitHub Release.
+#
+# Workflow-level `permissions: {}` makes every job start from nothing.
+#
+# Manual re-run: `workflow_dispatch` re-runs the pipeline for whatever's in
 # packages/wrapper-js/package.json on the default branch — useful for
 # recovering from a Trusted Publisher misconfig without burning another
-# version bump.
-#
-# Partial-publish recovery:
-#   Binaries uploaded but npm failed → re-trigger via workflow_dispatch.
-#   The npm gate (plan.publishing) is idempotent; the release job will
-#   update the existing GH Release (allow_updates: true) and re-upload
-#   artifacts, then the publish job will retry.
-#
-#   npm published but release/binaries failed → re-trigger via
-#   workflow_dispatch. The npm gate sees the version already on npm and
-#   skips the publish job; the release job re-runs and updates the GH
-#   Release.
+# version bump. Every job is gated on "version not yet on npm", so once npm
+# has the version nothing re-runs. A rerun after a failed publish rebuilds
+# the binaries and replaces the release assets (allow_updates: true) along
+# with the checksums the new tarball pins, so they stay consistent.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
+permissions: {}
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       publishing: ${{ steps.check_npm.outputs.published == 'false' }}
@@ -55,8 +75,10 @@ jobs:
         id: version
         run: |
           VERSION=$(node -p "require('./packages/wrapper-js/package.json').version")
-          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "could not read @openthink/ui-leaf version from packages/wrapper-js/package.json" >&2
+          # The version is file content: validate its shape before it reaches
+          # any other step, so it can never carry shell or output injection.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::invalid @openthink/ui-leaf version in packages/wrapper-js/package.json: '$VERSION'" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -64,19 +86,22 @@ jobs:
 
       - name: Check if already on npm
         id: check_npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if npm view "@openthink/ui-leaf@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@openthink/ui-leaf@$VERSION" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} already on npm — skipping release."
+            echo "@openthink/ui-leaf@$VERSION already on npm — skipping release."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "@openthink/ui-leaf@${{ steps.version.outputs.version }} not on npm — proceeding."
+            echo "@openthink/ui-leaf@$VERSION not on npm — proceeding."
           fi
 
       - name: Determine dist-tag and prerelease flag
         id: dist_tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-'; then
             echo "npm_tag=next" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
@@ -85,12 +110,13 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-  release:
+  binaries:
     needs: plan
     if: ${{ needs.plan.outputs.publishing == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,16 +128,59 @@ jobs:
         with:
           bun-version: 1.3.13
 
+      # --ignore-scripts: no dependency or workspace lifecycle script runs
+      # (this also skips the wrapper's postinstall download). The build
+      # scripts are run explicitly below.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
+      # build-binaries.ts pre-bundles React itself, then cross-compiles all
+      # five targets and writes dist/checksums.txt.
       - name: Build binaries
         run: bun run build:binaries
 
+      - name: Upload binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries
+          path: |
+            dist/ui-leaf-darwin-arm64
+            dist/ui-leaf-darwin-x64
+            dist/ui-leaf-linux-x64
+            dist/ui-leaf-linux-arm64
+            dist/ui-leaf-windows-x64.exe
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [plan, binaries]
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # contents: write to create the release and upload assets. This job runs
+    # no install and no build — only the checkout (for release notes), the
+    # artifact download and the release action.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: dist
+
       - name: Resolve release notes
         id: notes
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
-          F="RELEASE_NOTES_v${{ needs.plan.outputs.version }}.md"
+          F="RELEASE_NOTES_v$VERSION.md"
           if [ -f "$F" ]; then
             echo "path=$F" >> "$GITHUB_OUTPUT"
           fi
@@ -140,26 +209,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish:
-    needs: plan
+  package:
+    needs: [plan, binaries]
     if: ${{ needs.plan.outputs.publishing == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.13
 
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      # --ignore-scripts: no dependency/workspace lifecycle script runs, and
+      # the wrapper's postinstall never tries to download a binary.
       - name: Install dependencies
-        # UI_LEAF_SKIP_DOWNLOAD=1 prevents wrapper-js postinstall from trying to
-        # download a binary from a GH Release that may not exist yet in CI.
-        run: UI_LEAF_SKIP_DOWNLOAD=1 bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Typecheck
         run: bun run typecheck
@@ -167,32 +243,92 @@ jobs:
       - name: Build wrapper
         run: bun run build:wrapper
 
+      # Pin the binary digests into the package (AGT-2352): the exact
+      # checksums.txt the release job uploads alongside the binaries.
+      - name: Download pinned checksums
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: ${{ runner.temp }}/binaries
+
+      - name: Pin checksums into the package
+        run: |
+          set -euo pipefail
+          CS="$RUNNER_TEMP/binaries/checksums.txt"
+          for A in ui-leaf-darwin-arm64 ui-leaf-darwin-x64 ui-leaf-linux-x64 ui-leaf-linux-arm64 ui-leaf-windows-x64.exe; do
+            if ! awk -v a="$A" '$2 == a && $1 ~ /^[0-9a-f]+$/ && length($1) == 64 { f = 1 } END { exit !f }' "$CS"; then
+              echo "::error::checksums.txt has no valid entry for $A" >&2
+              exit 1
+            fi
+          done
+          cp "$CS" packages/wrapper-js/checksums.txt
+          cat packages/wrapper-js/checksums.txt
+
+      # prepack is first-party (copies the bin stub, README, LICENSE); run it
+      # explicitly, then pack with --ignore-scripts.
+      - name: Pack
+        working-directory: packages/wrapper-js
+        run: |
+          set -euo pipefail
+          npm run prepack
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/package"
+          TGZ=$(ls "$RUNNER_TEMP"/package/*.tgz)
+          if ! tar -tzf "$TGZ" | grep -qx 'package/checksums.txt'; then
+            echo "::error::packed tarball is missing checksums.txt" >&2
+            exit 1
+          fi
+          ls -l "$RUNNER_TEMP/package"
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Waits for `release` so npm never carries a version whose binaries are
+    # not yet downloadable.
+    needs: [plan, package, release]
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # id-token: write is the only grant: OIDC for npm Trusted Publishing and
+    # for --provenance. No contents permission — this job has no checkout.
+    permissions:
+      id-token: write
+    steps:
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # GitHub-hosted runners ship npm 10.x; npm 11.5+ is required for
-      # Trusted Publisher OIDC. Without it, publish 404s with a
-      # misleading "package not in registry" error.
-      # See: https://github.com/orgs/community/discussions/173102
+      - name: Download tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package
+
+      # Publishing a prebuilt tarball runs no lifecycle scripts;
+      # --ignore-scripts makes that explicit.
       #
-      # In-place `npm install -g npm@latest` self-corrupts. Corepack's
-      # `npm@latest` resolves to a stale 10.x. Install to a fresh
-      # prefix and prepend to PATH instead.
-      - name: Install npm 11 to a fresh prefix
-        run: |
-          mkdir -p "$HOME/.npm-global"
-          npm install --prefix "$HOME/.npm-global" -g npm@11.13.0
-          echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
-
-      - name: Verify npm version
-        run: npm --version
-
-      # Authenticates via OIDC. Requires npm-side Trusted Publisher
-      # configured at https://www.npmjs.com/package/@openthink/ui-leaf/access
-      # pointing at this repo + workflow file. No NPM_TOKEN secret needed.
+      # npx npm@<pinned>: Node 22 bundles npm 10.x, and npm 11.5.1+ is
+      # required to authenticate the registry PUT via OIDC (without it,
+      # publish 404s with a misleading "package not in registry" error).
+      # `npm install -g npm@latest` self-corrupts on hosted runners; npx
+      # fetches a clean npm without touching the global one. Pinned (not
+      # @latest) because this step holds id-token: write — bump explicitly.
       - name: Publish
-        working-directory: packages/wrapper-js
-        run: npm publish --provenance --access public --tag ${{ needs.plan.outputs.npm_tag }}
+        env:
+          NPM_TAG: ${{ needs.plan.outputs.npm_tag }}
+        run: |
+          shopt -s nullglob
+          TARBALLS=("$RUNNER_TEMP"/package/*.tgz)
+          if [ "${#TARBALLS[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+          npx -y npm@11.13.0 publish "${TARBALLS[0]}" --ignore-scripts --provenance --access public --tag "$NPM_TAG"
