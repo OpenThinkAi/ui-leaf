@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { delimiter, join } from "node:path";
 import open from "open";
-import { compileView, compileSource, assembleHtml } from "./compile.js";
+import { compileView, compileSource } from "./compile.js";
 import type { CloseReason } from "./ipc.js";
 import { countPageTargets, createCdpPipeClient, type CdpPipeClient } from "./internal/cdp-pipe.js";
 import { watchAppWindows } from "./internal/app-window-watch.js";
@@ -861,12 +861,11 @@ export interface DevServer {
   close: (reason?: CloseReason) => Promise<void>;
   /**
    * Replace in-memory data and emit a `data-updated` event to all
-   * registered listeners. Does not recompile the view (no rebundle), but
-   * does re-assemble the served HTML so `GET /` — a fresh tab, a reload,
-   * or a `reopen()` — first-paints with the latest data instead of the
-   * data baked in at compile time (issue #72, window B). In dataLoader
-   * mode the HTML embeds no data (the page bootstraps from GET /api/data),
-   * so no re-assembly happens.
+   * registered listeners. No recompile and no HTML change: the served page
+   * never carries data (AGT-2350). Connected pages get the new data over the
+   * token-gated /events stream; a fresh tab, reload, or `reopen()` fetches
+   * it from the token-gated GET /api/data, so it first-paints the latest
+   * data (issue #72).
    */
   update: (data: unknown) => void;
   /**
@@ -1015,11 +1014,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     const result = await compileView({
       entry: view,
       viewsRoot,
-      data: dataLoader ? null : data,
       title,
       csp: cspHeader ?? undefined,
-      token,
-      dataLoader: !!dataLoader,
     });
 
     if (result.errors.length > 0) {
@@ -1027,19 +1023,14 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       throw new Error(`ui-leaf: view compilation failed: ${msg}`);
     }
 
-    // Mutable view state: the / handler reads from this on every request.
-    // update(), swapView(), patch() mutate it in place.
+    // Mutable view state: the / and /api/data handlers read from this on
+    // every request; update(), swapView(), patch() mutate it in place.
     //
-    // `js` is the compiled bundle embedded in `html`, retained so update()
-    // can re-assemble the page with fresh data without a rebundle.
-    // `htmlEmbedsData` tracks whether the *current* html bakes data in at
-    // assemble time (true unless mounted in dataLoader mode; swapView/patch
-    // always produce data-embedding pages) — when true, update() must
-    // re-assemble html or GET / would serve stale data (issue #72).
+    // `html` never contains mount data (AGT-2350): GET / is unauthenticated,
+    // so the page fetches `data` from the token-gated GET /api/data instead,
+    // whether it came from `data` or `dataLoader`.
     const viewState = {
       html: result.html,
-      js: result.js ?? "",
-      htmlEmbedsData: !dataLoader,
       data: dataLoader ? loadedData : data,
     };
 
@@ -1136,12 +1127,6 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       }
 
       if (method === "GET" && path === "/api/data") {
-        if (!dataLoader) {
-          return new Response(JSON.stringify({ error: "not found" }), {
-            status: 404,
-            headers: { ...headers, "Content-Type": "application/json" },
-          });
-        }
         if (!checkAuth(req, token)) {
           return new Response(JSON.stringify({ error: "unauthorized" }), {
             status: 401,
@@ -1431,54 +1416,34 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         listeners.get(event)?.delete(listener);
       },
       update(newData: unknown): void {
+        // The HTML stays data-free; a later load fetches this from /api/data.
         viewState.data = newData;
-        // Keep the served page in sync: the compiled html embeds data at
-        // assemble time, so without this a tab that hasn't SSE-subscribed
-        // yet (or a later reload / reopen()) would first-paint stale data.
-        // Cheap string assembly of the retained bundle — no rebundle.
-        if (viewState.htmlEmbedsData) {
-          viewState.html = assembleHtml({
-            js: viewState.js,
-            title,
-            csp: cspHeader ?? undefined,
-            data: newData,
-            dataLoader: false,
-          });
-        }
         broadcast({ type: "data-updated", data: newData });
         fireEvent("data-updated");
       },
       async swapView(source: string): Promise<import("./compile.js").BuildError[]> {
         const r = await compileSource({
           source,
-          data: viewState.data,
           title,
           csp: cspHeader ?? undefined,
-          token,
         });
         if (r.errors.length > 0) return r.errors;
         viewState.html = r.html;
-        viewState.js = r.js ?? "";
-        viewState.htmlEmbedsData = true; // compileSource always embeds data
         broadcast({ type: "view-swapped" });
         fireEvent("view-swapped");
         return [];
       },
       async patch(newData: unknown, source: string): Promise<import("./compile.js").BuildError[]> {
-        // Compile first with newData so the HTML embeds the incoming data.
+        // Compile first; the HTML stays data-free (AGT-2350).
         const r = await compileSource({
           source,
-          data: newData,
           title,
           csp: cspHeader ?? undefined,
-          token,
         });
         if (r.errors.length > 0) return r.errors;
         // Only mutate state on compile success (atomicity guarantee).
         viewState.data = newData;
         viewState.html = r.html;
-        viewState.js = r.js ?? "";
-        viewState.htmlEmbedsData = true; // compileSource always embeds data
         broadcast({ type: "data-updated", data: newData });
         broadcast({ type: "view-swapped" });
         fireEvent("data-updated");

@@ -96,14 +96,16 @@ describe("compileView", () => {
     expect(result.html).toContain("default-src 'self'");
   }, 30_000);
 
-  test("data is inlined as JSON.parse call in the output", async () => {
+  test("data is never inlined into the output (AGT-2350)", async () => {
     const result = await compileView({
       entry: "trivial",
       viewsRoot: VIEWS_ROOT,
       data: { secret: "value" },
     });
     expect(result.errors).toHaveLength(0);
-    expect(result.html).toContain("JSON.parse(");
-    expect(result.html).toContain("secret");
+    expect(result.html).not.toContain("secret");
+    expect(result.html).toContain("window.__UI_LEAF__ = {};");
+    // The bundle bootstraps from the token-gated endpoint instead.
+    expect(result.html).toContain("/api/data");
   }, 30_000);
 });

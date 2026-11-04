@@ -70,7 +70,7 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `version` | `"1"` (const) | ✓ | Protocol version literal. A new $id hosts future breaking versions. | — |
 | `view` | string | ✓ | View name (resolved relative to viewsRoot) or inline TSX source string. | — |
 | `viewsRoot` | string | ✓ | Absolute path to the directory containing named view files. | — |
-| `data` | any |  | Initial data object passed to the view component as props (any JSON value). | — |
+| `data` | any |  | Initial data object passed to the view component as props (any JSON value). Never inlined into the served HTML: the page fetches it from the token-gated GET /api/data. | — |
 | `mutations` | array |  | Names of mutation handlers the view is allowed to call. | — |
 | `title` | string |  | Browser tab title. | — |
 | `port` | integer |  | TCP port to bind. 0 = OS-assigned. | min: 0, max: 65535 |
@@ -166,7 +166,7 @@ Replace in-memory data. The served page HTML is re-assembled with the new data (
 |---|---|:---:|---|---|
 | `version` | `"1"` (const) | ✓ | Protocol version literal. A new $id hosts future breaking versions. | — |
 | `type` | `"update"` (const) | ✓ | Discriminant: data update. | — |
-| `data` | any | ✓ | New data object to pass to the view component as props (any JSON value, including null). | — |
+| `data` | any | ✓ | New data object to pass to the view component as props (any JSON value, including null). Pushed to the page over the token-gated /events stream; the served HTML is unchanged. | — |
 
 
 ### `view`

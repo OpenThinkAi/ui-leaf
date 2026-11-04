@@ -24,7 +24,7 @@
           "description": "Absolute path to the directory containing named view files."
         },
         "data": {
-          "description": "Initial data object passed to the view component as props (any JSON value)."
+          "description": "Initial data object passed to the view component as props (any JSON value). Never inlined into the served HTML: the page fetches it from the token-gated GET /api/data."
         },
         "mutations": {
           "type": "array",
@@ -162,7 +162,7 @@
           "description": "Discriminant: data update."
         },
         "data": {
-          "description": "New data object to pass to the view component as props (any JSON value, including null)."
+          "description": "New data object to pass to the view component as props (any JSON value, including null). Pushed to the page over the token-gated /events stream; the served HTML is unchanged."
         }
       },
       "additionalProperties": false

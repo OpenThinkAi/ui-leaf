@@ -27,10 +27,13 @@ the roadmap; today, non-Node callers drive the binary directly over stdio (see
 > **Sensitive-data callers (PHI / PCI / financial records):** the v0.8.x SDK
 > exposed `dataLoader`, an in-memory alternative to `data` that served the
 > payload at a token-gated `/api/data` endpoint instead of inlining it into the
-> served HTML. The v1.0 binary's data-update channel uses the same in-memory +
-> token-gated posture as a default — the `data` config field is delivered to
-> the browser only over the token-gated channel, never inlined into the served
-> HTML.
+> served HTML. The binary now does this for every mount. The served HTML
+> (`GET /`, which needs no token) carries only the view bundle, never `data`.
+> The page fetches the initial data from the token-gated `GET /api/data` and
+> receives `update`/`patch` data over the token-gated `/events` stream. A local
+> process that fetches `GET /` without the token gets no data. The data stays
+> in the ui-leaf process's memory for the mount lifetime and is never written
+> to disk by ui-leaf.
 
 ## Install
 
@@ -278,9 +281,9 @@ Launching a browser only makes sense on a desktop someone is looking at. When a
 mount runs inside an SSH session (`SSH_CONNECTION`/`SSH_TTY` set), ui-leaf skips
 the launch automatically and instead prints the full launch URL — **including
 the `#token=` fragment** — to stderr, plus an `ssh -L` tunnel hint. Without the
-fragment the page renders its embedded snapshot but every authed endpoint
-(`/mutate`, `/events`, `/api/data`, `/heartbeat`) answers 401, so always copy
-the whole URL. The server itself stays loopback-bound; reach it from another
+fragment the page shows a "session ended" notice instead of the view: every
+authed endpoint (`/mutate`, `/events`, `/api/data`, `/heartbeat`) answers
+401, and the data only comes from `/api/data`. Always copy the whole URL. The server itself stays loopback-bound; reach it from another
 device via SSH port forwarding:
 
 ```sh
@@ -330,7 +333,7 @@ the rejection's `cause` carries the binary's exit reason.
 |---|---|---|---|
 | `view` | `string` | _required_ | View name (resolved against `viewsRoot`) — typically the basename of a `.tsx` file under `viewsRoot/`. |
 | `viewsRoot` | `string` | _required_ | **Absolute** path to the directory holding view `.tsx` files. |
-| `data` | `unknown` | `undefined` | Initial data props for the view. Delivered to the browser over the token-gated channel — never inlined into the served HTML. |
+| `data` | `unknown` | `undefined` | Initial data props for the view. Delivered to the browser only over token-gated channels: the page fetches it from `GET /api/data`, and `update`/`patch` data arrives over `/events`. It is never inlined into the served HTML. |
 | `mutations` | `Record<string, (args) => Promise<unknown>>` | `{}` | Map of named mutation handlers the view is allowed to call. Keys are declared to the binary as the allowed-mutation list; unknown names return 404. |
 | `title` | `string` | `"ui-leaf"` | Browser tab title. |
 | `port` | `number` | `5810` | TCP port to bind. Auto-bumps if busy; the bound port is reflected on `view.port`/`view.url`. Pass `0` to let the OS pick. |

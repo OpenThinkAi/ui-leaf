@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mount } from "../packages/cli/src/index.ts";
-import * as vm from "node:vm";
+import { startDevServer } from "../packages/cli/src/server.ts";
 import { join } from "node:path";
 
 const VIEWS_ROOT = join(import.meta.dir, "fixtures");
@@ -10,50 +9,39 @@ describe("prototype pollution hardening", () => {
     "__proto__ key lands as own property, not prototype mutation",
     async () => {
       // JSON.parse creates an object where __proto__ is an own data property.
-      // Before the fix, interpolating this into a JS object literal would
-      // have triggered Annex B.3.1 and mutated the prototype instead.
+      // Data reaches the page only as a JSON body from /api/data (AGT-2350),
+      // parsed with res.json() — JSON.parse semantics — so it can never be
+      // interpolated into a JS object literal (Annex B.3.1).
       const data = JSON.parse('{"__proto__": {"polluted": true}}');
 
-      const view = await mount({
+      let openedUrl = "";
+      const srv = await startDevServer({
+        _env: {},
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
-        silent: true,
-        port: 0,
         data,
+        port: 0,
+        openBrowser: true,
+        _opener: async (u: string) => { openedUrl = u; },
+        silent: true,
       });
 
       try {
-        const resp = await fetch(view.url);
-        const html = await resp.text();
+        const html = await (await fetch(srv.url + "/")).text();
+        expect(html).not.toContain("polluted");
 
-        const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
-        if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
+        const token = /#token=([0-9a-f]+)/.exec(openedUrl)?.[1];
+        if (!token) throw new Error(`no token in opened URL: ${openedUrl}`);
+        const body = await (
+          await fetch(srv.url + "/api/data", { headers: { "X-UI-Leaf-Token": token } })
+        ).text();
+        const parsed = JSON.parse(body) as Record<string, unknown>;
 
-        const ctx = vm.createContext({
-          window: { location: { hash: "", pathname: "/", search: "" } },
-          history: { replaceState: () => {} },
-        });
-        vm.runInContext(match[1], ctx);
-
-        // Assertion 1 (AC #2a): prototype must be the plain Object prototype,
-        // not the attacker-supplied { polluted: true } object.
-        // Run inside the vm so Object.prototype is the same realm.
-        const protoIsClean = vm.runInContext(
-          "Object.getPrototypeOf(window.__UI_LEAF__.data) === Object.prototype",
-          ctx,
-        ) as boolean;
-        expect(protoIsClean).toBe(true);
-
-        // Assertion 2 (AC #2b): __proto__ must be an own property with value
-        // { polluted: true }. Serialize via vm JSON to avoid cross-realm issues.
-        const protoOwnJson = vm.runInContext(
-          "JSON.stringify(window.__UI_LEAF__.data.__proto__)",
-          ctx,
-        ) as string;
-        expect(JSON.parse(protoOwnJson)).toEqual({ polluted: true });
+        expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+        expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+        expect(parsed["__proto__"]).toEqual({ polluted: true });
       } finally {
-        await view.close();
+        await srv.close();
       }
     },
     60_000,

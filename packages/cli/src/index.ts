@@ -22,14 +22,11 @@ export interface MountOptions {
   /**
    * JSON-serializable data passed to the view as a prop.
    *
-   * Privacy note: the data is compiled into the HTML served at the mount URL
-   * and held in memory for the mount lifetime. Any same-UID local process
-   * that can reach `127.0.0.1:<port>` can fetch `GET /` and read it — the
-   * per-launch token guards `/mutate` against drive-by cross-origin requests
-   * in the browser, not against other processes on the machine. For PHI, PCI,
-   * financial records, or anything where a same-UID local reader is in your
-   * threat model, use `dataLoader` instead — the loader's return value is
-   * served at a token-gated `/api/data` endpoint and never appears in the HTML.
+   * Privacy: the data is never inlined into the HTML served at the mount URL
+   * (AGT-2350). The page fetches it from the token-gated `GET /api/data` and
+   * receives updates over the token-gated `/events` stream, so a local
+   * process that fetches `GET /` without the token cannot read it. It is
+   * held in memory for the mount lifetime and never written to disk.
    */
   data?: unknown;
   /**
@@ -40,8 +37,9 @@ export interface MountOptions {
    * view fetches it on first render before calling `createRoot().render()`.
    * The data never appears in the compiled HTML.
    *
-   * Use this instead of `data` for PHI, PCI, financial records, or anything
-   * else where in-HTML data exposure is in your threat model.
+   * Delivery is the same as for `data` (which is also served only from
+   * `/api/data` since AGT-2350); the difference is that the value is produced
+   * lazily by the loader rather than passed in.
    *
    * Error semantics: if the loader rejects, the rejection propagates to the
    * `mount()` caller (no automatic retry). Errors surface at mount time,

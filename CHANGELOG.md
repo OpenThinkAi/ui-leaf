@@ -7,6 +7,15 @@ changes that have landed on `main` but are not yet released.
 
 ### Security
 
+- **Mount data is never inlined into the served HTML (AGT-2350).** `GET /`
+  needs no token, and it used to embed `data` (and every later `update`/
+  `patch` payload) in the page. Now the page holds only the view bundle. It
+  fetches data from the token-gated `GET /api/data` and receives updates over
+  the token-gated `/events` stream, as `dataLoader` mounts already did. A
+  local process that reads `GET /` without the token gets no data. The README
+  "Sensitive-data callers" note and the `MountOptions` table now match the
+  code. The page now makes one extra loopback request before its first
+  render; the API is unchanged.
 - **Postinstall verifies the binary against checksums pinned in the npm
   package (AGT-2352).** The release workflow copies the binaries'
   `checksums.txt` into `@openthink/ui-leaf` before packing, so the expected
