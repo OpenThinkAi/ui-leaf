@@ -44,6 +44,7 @@
     "dist",
     "bin",
     "run-postinstall.cjs",
+    "checksums.txt",
     "README.md",
     "LICENSE"
   ],

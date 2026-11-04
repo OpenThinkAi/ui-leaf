@@ -5,6 +5,23 @@ changes that have landed on `main` but are not yet released.
 
 ## Unreleased
 
+### Security
+
+- **Postinstall verifies the binary against checksums pinned in the npm
+  package (AGT-2352).** The release workflow copies the binaries'
+  `checksums.txt` into `@openthink/ui-leaf` before packing, so the expected
+  SHA-256 digests are covered by the tarball's npm provenance. Postinstall
+  no longer fetches `checksums.txt` from the GitHub Release, so swapping a
+  release binary together with its checksum no longer passes verification.
+  A published package missing its pinned `checksums.txt` now fails the
+  install instead of trusting the network.
+- **Publish workflow hardened (AGT-2354).** Workflow-level permissions are
+  empty and each job holds only what it needs. Dependencies are installed
+  with `--ignore-scripts`. The npm publish job only downloads a prebuilt
+  tarball and publishes it with a pinned npm. The release job no longer
+  installs or builds anything while holding `contents: write`. npm publishes
+  only after the GitHub Release has its binaries.
+
 ## 1.7.0 — 2026-10-11
 
 ### Fixed

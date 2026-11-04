@@ -18,7 +18,8 @@ async function makeTmpDir(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Local test HTTP server — serves checksums.txt and a fake binary payload.
+// Local test HTTP server — serves a fake binary payload, plus a release-side
+// checksums.txt that postinstall must never consult (AGT-2352).
 // ---------------------------------------------------------------------------
 interface TestServer {
   baseUrl: string;
@@ -91,19 +92,19 @@ describe("PLATFORM_MAP", () => {
 // ---------------------------------------------------------------------------
 describe("parseChecksums", () => {
   const csText = [
-    "aabbcc0011223344556677889900aabb  ui-leaf-darwin-arm64",
-    "1122334455667788990011aabbccddee  ui-leaf-linux-x64",
+    "aabbcc0011223344556677889900aabbaabbcc0011223344556677889900aabb  ui-leaf-darwin-arm64",
+    "1122334455667788990011aabbccddee1122334455667788990011aabbccddee  ui-leaf-linux-x64",
     "",
   ].join("\n");
 
   test("returns matching digest", () => {
     expect(parseChecksums(csText, "ui-leaf-darwin-arm64")).toBe(
-      "aabbcc0011223344556677889900aabb"
+      "aabbcc0011223344556677889900aabbaabbcc0011223344556677889900aabb"
     );
   });
   test("returns second matching artifact", () => {
     expect(parseChecksums(csText, "ui-leaf-linux-x64")).toBe(
-      "1122334455667788990011aabbccddee"
+      "1122334455667788990011aabbccddee1122334455667788990011aabbccddee"
     );
   });
   test("throws when artifact not found", () => {
@@ -111,10 +112,15 @@ describe("parseChecksums", () => {
       /no checksum entry for ui-leaf-windows-x64\.exe/
     );
   });
+  test("rejects a malformed (non-sha256) digest", () => {
+    expect(() => parseChecksums("deadbeef  ui-leaf-linux-x64\n", "ui-leaf-linux-x64")).toThrow(
+      /malformed checksum entry/
+    );
+  });
   test("handles checksums with extra whitespace lines", () => {
     const withBlanks = "\n  \n" + csText + "\n  \n";
     expect(parseChecksums(withBlanks, "ui-leaf-linux-x64")).toBe(
-      "1122334455667788990011aabbccddee"
+      "1122334455667788990011aabbccddee1122334455667788990011aabbccddee"
     );
   });
 });
@@ -188,8 +194,15 @@ async function runPostinstall(
   return { exitCode, stdout, stderr };
 }
 
-async function makePackageRoot(version = "0.0.1"): Promise<string> {
+async function makePackageRoot(
+  version = "0.0.1",
+  pinnedChecksums?: string
+): Promise<string> {
   const dir = await makeTmpDir();
+  if (pinnedChecksums !== undefined) {
+    // The checksums.txt the publish workflow pins into the npm tarball.
+    await fsp.writeFile(path.join(dir, "checksums.txt"), pinnedChecksums, "utf8");
+  }
   await fsp.mkdir(path.join(dir, "bin"), { recursive: true });
   // Minimal package.json the postinstall reads for version
   await fsp.writeFile(
@@ -210,18 +223,22 @@ describe("postinstall — download + verify flow", () => {
   // Skip the integration tests if we're on an unsupported platform in CI.
   const itIfSupported = currentTarget ? test : test.skip;
 
+  const goodChecksums = currentTarget ? `${fakeDigest}  ${currentTarget.artifact}\n` : "";
+  const badChecksums = currentTarget
+    ? `${"00".repeat(32)}  ${currentTarget.artifact}\n`
+    : "";
+
   let srv: TestServer;
   beforeAll(async () => {
     if (!currentTarget) return;
-    const checksumsTxt = `${fakeDigest}  ${currentTarget.artifact}\n`;
-    srv = await startTestServer(checksumsTxt, fakePayload);
+    srv = await startTestServer(goodChecksums, fakePayload);
   });
   afterAll(() => {
     srv?.close();
   });
 
   itIfSupported("downloads binary, verifies SHA256, writes sentinel", async () => {
-    const pkgRoot = await makePackageRoot("0.0.1");
+    const pkgRoot = await makePackageRoot("0.0.1", goodChecksums);
     try {
       const { exitCode, stderr } = await runPostinstall(
         { UI_LEAF_DOWNLOAD_BASE: `${srv.baseUrl}/v0.0.1` },
@@ -283,33 +300,99 @@ describe("postinstall — download + verify flow", () => {
   });
 
   itIfSupported("fails with non-zero exit on SHA256 mismatch", async () => {
-    const pkgRoot = await makePackageRoot("0.0.1");
+    // Pinned digest is wrong; the release serves a matching checksums.txt,
+    // which must not rescue the install.
+    const pkgRoot = await makePackageRoot("0.0.1", badChecksums);
     try {
-      // Serve a checksums.txt with a wrong digest
-      const badChecksums = `${"00".repeat(32)}  ${currentTarget!.artifact}\n`;
-      const badSrv = await startTestServer(badChecksums, fakePayload);
-
       const { exitCode, stderr } = await runPostinstall(
-        { UI_LEAF_DOWNLOAD_BASE: `${badSrv.baseUrl}/v0.0.1` },
+        { UI_LEAF_DOWNLOAD_BASE: `${srv.baseUrl}/v0.0.1` },
         pkgRoot
       );
-      badSrv.close();
 
       expect(exitCode).not.toBe(0);
       expect(stderr).toMatch(/SHA256 mismatch/);
+      await expect(
+        fsp.stat(path.join(pkgRoot, "bin", currentTarget!.binary))
+      ).rejects.toThrow();
+    } finally {
+      await fsp.rm(pkgRoot, { recursive: true, force: true });
+    }
+  });
+
+  itIfSupported("ignores a swapped binary + checksums.txt on the release", async () => {
+    // Attacker replaces both release assets consistently; the pinned digest
+    // (of the genuine binary) still rejects the swap.
+    const evilPayload = Buffer.from("attacker binary");
+    const evilSrv = await startTestServer(
+      `${sha256Hex(evilPayload)}  ${currentTarget!.artifact}\n`,
+      evilPayload
+    );
+    const pkgRoot = await makePackageRoot("0.0.1", goodChecksums);
+    try {
+      const { exitCode, stderr } = await runPostinstall(
+        { UI_LEAF_DOWNLOAD_BASE: `${evilSrv.baseUrl}/v0.0.1` },
+        pkgRoot
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toMatch(/SHA256 mismatch/);
+    } finally {
+      evilSrv.close();
+      await fsp.rm(pkgRoot, { recursive: true, force: true });
+    }
+  });
+
+  itIfSupported("fails closed without network when pinned checksums.txt is missing", async () => {
+    const pkgRoot = await makePackageRoot("0.0.1");
+    let hits = 0;
+    const s = http.createServer((_req, res) => {
+      hits++;
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    const port = (s.address() as { port: number }).port;
+    try {
+      const { exitCode, stderr } = await runPostinstall(
+        { UI_LEAF_DOWNLOAD_BASE: `http://127.0.0.1:${port}/v0.0.1` },
+        pkgRoot
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toMatch(/cannot read the pinned binary checksum/);
+      expect(hits).toBe(0);
+    } finally {
+      s.close();
+      await fsp.rm(pkgRoot, { recursive: true, force: true });
+    }
+  });
+
+  itIfSupported("fails closed when pinned checksums.txt has no entry for this platform", async () => {
+    const other = Object.values(PLATFORM_MAP).find(
+      (t) => t.artifact !== currentTarget!.artifact
+    )!;
+    const pkgRoot = await makePackageRoot(
+      "0.0.1",
+      `${fakeDigest}  ${other.artifact}\n`
+    );
+    try {
+      const { exitCode, stderr } = await runPostinstall(
+        { UI_LEAF_DOWNLOAD_BASE: `${srv.baseUrl}/v0.0.1` },
+        pkgRoot
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toMatch(/no checksum entry/);
     } finally {
       await fsp.rm(pkgRoot, { recursive: true, force: true });
     }
   });
 
   itIfSupported("retries on network errors and fails after 3 attempts", async () => {
-    const pkgRoot = await makePackageRoot("0.0.1");
+    const pkgRoot = await makePackageRoot("0.0.1", goodChecksums);
     try {
       let hits = 0;
       const failSrv = await (async () => {
         const s = http.createServer((req, res) => {
           hits++;
-          // Return 500 to simulate a transient error for checksums AND binary
+          // Return 500 to simulate a transient error on the binary download
           res.writeHead(500);
           res.end("internal server error");
         });
@@ -332,8 +415,8 @@ describe("postinstall — download + verify flow", () => {
       failSrv.close();
 
       expect(exitCode).not.toBe(0);
-      expect(stderr).toMatch(/failed to fetch checksums/);
-      // 3 attempts for checksums (binary download never reached due to early failure)
+      expect(stderr).toMatch(/download failed/);
+      // 3 attempts for the binary; checksums are never fetched over the network
       expect(hits).toBe(3);
     } finally {
       await fsp.rm(pkgRoot, { recursive: true, force: true });

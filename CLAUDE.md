@@ -42,6 +42,14 @@ workflow run fails (e.g. transient npm error, Trusted Publisher
 misconfig), re-trigger the same run via `workflow_dispatch`; the npm
 gate makes that idempotent.
 
+The workflow's binaries job writes `checksums.txt`. That one file is both
+uploaded to the GitHub Release and copied into the npm package as
+`packages/wrapper-js/checksums.txt` (gitignored, publish-time only).
+Postinstall verifies downloads against the package copy only (AGT-2352). In a
+dev checkout the file is absent and `run-postinstall.cjs` skips the
+download. The npm publish job runs after the release job, so a version
+never reaches npm before its binaries are on the release.
+
 The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` +
 `publish.yml`; renaming the workflow file requires reconfiguring the
 binding at <https://www.npmjs.com/package/@openthink/ui-leaf/access>.
