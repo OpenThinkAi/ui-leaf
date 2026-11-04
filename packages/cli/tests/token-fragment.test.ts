@@ -126,7 +126,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("<!-- ui-leaf bootstrap -->");
@@ -140,7 +139,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("location.hash");
@@ -155,7 +153,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("sessionEnded");
@@ -169,7 +166,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("X-UI-Leaf-Token");
@@ -185,7 +181,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       // The on-hash branch writes to sessionStorage under the documented key.
@@ -203,7 +198,6 @@ describe("bootstrap script in HTML", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       // The KEY is composed at runtime from the prefix + port so simultaneous
@@ -284,7 +278,6 @@ describe("bootstrap script behavior (sandboxed)", () => {
     const result = await compileView({
       entry: "trivial",
       viewsRoot: VIEWS_ROOT,
-      data: {},
     });
     expect(result.errors).toHaveLength(0);
     const iife = extractBootstrapIife(result.html);
@@ -485,7 +478,6 @@ describe("session-ended / reload UX (AC#8)", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: {},
       });
       expect(result.errors).toHaveLength(0);
       // The message is inside the bundled JS (sessionEnded branch in the module).

@@ -59,12 +59,6 @@ export interface CompileOptions {
   entry: string;
   /** Root directory holding .tsx view files. */
   viewsRoot: string;
-  /**
-   * Ignored since AGT-2350: mount data is never inlined into the HTML. The
-   * page always fetches it from the token-gated `GET /api/data`.
-   * @deprecated No-op; accepted for API symmetry.
-   */
-  data?: unknown;
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
   /**
@@ -85,12 +79,7 @@ export interface CompileOptions {
    * @deprecated No-op since v1.0.0 — token delivery is handled by startDevServer.
    */
   token?: string;
-  /**
-   * Ignored since AGT-2350: every compiled page fetches its data from the
-   * token-gated `GET /api/data`, so there is no separate loader mode.
-   * @deprecated No-op; accepted for API symmetry.
-   */
-  dataLoader?: boolean;
+
 }
 
 /**
@@ -105,11 +94,6 @@ export interface CompileOptions {
 export interface CompileSourceOptions {
   /** Raw TSX source string to compile. Must be a self-contained component. */
   source: string;
-  /**
-   * Ignored since AGT-2350: data is never inlined; see CompileOptions.data.
-   * @deprecated No-op; accepted for API symmetry.
-   */
-  data?: unknown;
   /** Browser tab title. Defaults to "ui-leaf". */
   title?: string;
   /** Raw CSP string. Undefined / absent means no CSP meta tag. */
@@ -285,8 +269,10 @@ ${SHARED_BRIDGE}
       headers: token ? { "X-UI-Leaf-Token": token } : {},
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error("ui-leaf: /api/data fetch failed (" + res.status + "): " + text);
+      // Stale or wrong token (e.g. a sessionStorage token from an earlier
+      // mount on this port): show the session-ended notice, not a blank page.
+      el!.innerHTML = ${JSON.stringify(SESSION_ENDED_HTML)};
+      return;
     }
     const fetched: unknown = await res.json();
     if (!updatedBeforeFetch) currentData = fetched;
@@ -402,8 +388,8 @@ export async function compileView(opts: CompileOptions): Promise<CompileResult> 
     viewsRoot,
     title = "ui-leaf",
     csp,
-    // data, dataLoader, allowedHosts and token have no compile-time effect;
-    // accepted for API symmetry.
+    // allowedHosts and token have no compile-time effect; accepted for API
+    // symmetry. Mount data is never compiled in (AGT-2350).
   } = opts;
 
   const viewsRootAbs = resolve(viewsRoot);

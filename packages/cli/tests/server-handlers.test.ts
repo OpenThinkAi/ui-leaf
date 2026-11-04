@@ -244,7 +244,7 @@ describe("patch()", () => {
 
       const html = await (await fetch(srv.url + "/")).text();
       expect(html).toContain("<!doctype html>");
-      expect(html).not.toContain('"patched"');
+      expect(html).not.toContain("patched");
     },
     30_000,
   );

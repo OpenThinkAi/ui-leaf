@@ -146,7 +146,7 @@ Caller's response to a mutate request: error path. Correlated by id.
 
 ### `update`
 
-Replace in-memory data. The served page HTML is re-assembled with the new data (no recompile) and a data-updated SSE event is broadcast to connected browser tabs, so already-connected tabs re-render and later loads (reload, reopen) first-paint the latest data. Sent before `ready`, the message is buffered — last write wins — and applied to the mount just before `ready` is emitted.
+Replace in-memory data and broadcast a data-updated SSE event over the token-gated /events stream, so already-connected tabs re-render. The served page HTML is unchanged and never carries data; later loads (reload, reopen) fetch the latest data from the token-gated GET /api/data before first paint. Sent before `ready`, the message is buffered — last write wins — and applied to the mount just before `ready` is emitted.
 
 **Example**
 
