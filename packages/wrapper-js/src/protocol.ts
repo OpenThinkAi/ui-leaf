@@ -87,7 +87,12 @@ export type InboundConfig = {
   windowPosition?: { x: number; y: number };
   /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
   extensions?: string[];
-  /** Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in tab mode. */
+  /**
+   * Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in
+   * tab mode. Unauthenticated: any local process gets full DevTools control
+   * (JS eval, cookies, the ui-leaf token). Never pair with a sensitive
+   * persistent profile.
+   */
   debugPort?: number;
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };
@@ -180,7 +185,12 @@ export type SpawnConfig = {
   windowPosition?: { x: number; y: number };
   /** Unpacked Chrome extension dirs to load for shell:"app". Ignored in tab mode. */
   extensions?: string[];
-  /** Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in tab mode. */
+  /**
+   * Opt-in remote-debugging port (CDP, 127.0.0.1) for shell:"app". Ignored in
+   * tab mode. Unauthenticated: any local process gets full DevTools control
+   * (JS eval, cookies, the ui-leaf token). Never pair with a sensitive
+   * persistent profile.
+   */
   debugPort?: number;
   /** Opt-in persistent browser profile dir for shell:"app". Ignored in tab mode. */
   profile?: { dir: string };

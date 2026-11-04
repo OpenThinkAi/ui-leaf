@@ -88,7 +88,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "Opt-in remote-debugging port for shell:\"app\" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode."
+          "description": "Opt-in remote-debugging port for shell:\"app\" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode. SECURITY: the CDP endpoint has no authentication. Loopback-only binding is not a security boundary: any local process, under any user account, can connect and get full DevTools control of this Chrome. That includes running JavaScript in any page, reading cookies and storage, and reading the ui-leaf page URL with its #token= fragment (via /json), which unlocks /api/data and /mutate. Do not combine debugPort with a persistent profile that holds sensitive logged-in sessions, and do not use it on shared or multi-user machines."
         },
         "csp": {
           "type": "string",

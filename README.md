@@ -275,6 +275,26 @@ For the full field-by-field reference — including every message type, all opti
   every launch. Omit it (the default) for a throwaway profile. Ignored in tab mode; use
   a distinct `dir` per concurrent app-mode mount.
 
+### `debugPort` exposes the browser
+
+`debugPort` opens Chrome's remote-debugging endpoint on `127.0.0.1:<port>`.
+**That endpoint has no authentication.** Binding to loopback keeps it off the
+network but not away from other software on the machine. Any local process,
+running as any user, can connect to it, list the open pages (`/json`), and
+take full DevTools control:
+
+- run arbitrary JavaScript in any page (`Runtime.evaluate`)
+- read every cookie and all storage (`Network.getAllCookies`), which can
+  mean taking over any session in the profile
+- read the ui-leaf page URL, including its `#token=` fragment. With the token
+  it can call `/api/data` and `/mutate` like the view itself.
+
+Use `debugPort` only on a single-user machine whose local processes you
+trust, and only while you need it. **Do not combine it with a persistent
+`profile` holding sensitive logged-in sessions** (banking, health, work SSO).
+Use a throwaway profile (omit `profile`) or a dedicated profile used only for
+the page you are automating.
+
 ### Remote / SSH sessions (`UI_LEAF_NO_OPEN`)
 
 Launching a browser only makes sense on a desktop someone is looking at. When a
@@ -342,7 +362,7 @@ the rejection's `cause` carries the binary's exit reason.
 | `windowSize` | `{ width: number; height: number }` | _none_ | Initial Chrome window size in CSS pixels for `shell: "app"`. Ignored in `"tab"` mode. |
 | `windowPosition` | `{ x: number; y: number }` | _none_ | Initial Chrome window position in screen CSS pixels for `shell: "app"` (`--window-position=x,y`). Pairs with `windowSize` for tiled / second-screen layouts; coordinates may be negative on multi-monitor setups. Ignored in `"tab"` mode. |
 | `extensions` | `string[]` | _none_ | Absolute paths to unpacked Chrome extension dirs to load into the `shell: "app"` window (`--load-extension` + `--disable-extensions-except`), e.g. a content-script overlay on a third-party page. Dirs that don't exist are skipped with a stderr warning. Ignored in `"tab"` mode. **Note:** Chrome 149+ disabled `--load-extension` from the command line — use `debugPort` (CDP) to augment pages on current Chrome. |
-| `debugPort` | `number` | _none_ | Opt-in remote-debugging port for `shell: "app"` (`--remote-debugging-port=<n>`, bound to `127.0.0.1`) so a host process can attach over the Chrome DevTools Protocol — e.g. inject an overlay onto a page you don't control via `Page.addScriptToEvaluateOnNewDocument` / `Runtime.evaluate`. Integer 1–65535; loopback-only. If the port is already in use, Chrome launches but may fail to bind the endpoint — pick a free port. Ignored in `"tab"` mode. |
+| `debugPort` | `number` | _none_ | Opt-in remote-debugging port for `shell: "app"` (`--remote-debugging-port=<n>`, bound to `127.0.0.1`) so a host process can attach over the Chrome DevTools Protocol — e.g. inject an overlay onto a page you don't control via `Page.addScriptToEvaluateOnNewDocument` / `Runtime.evaluate`. Integer 1–65535; loopback-only. If the port is already in use, Chrome launches but may fail to bind the endpoint — pick a free port. Ignored in `"tab"` mode. **Security:** the port has no authentication, and loopback-only is not a boundary. Any local process, under any user account, gets full DevTools control: it can run JavaScript in the page, read cookies and storage, and read the ui-leaf token from the page URL. Don't combine it with a `profile` that holds sensitive logged-in sessions, and don't use it on shared machines. See [`debugPort` exposes the browser](#debugport-exposes-the-browser). |
 | `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount (a second launch on a busy `dir` hands off to the running Chrome and exits, which closes that mount with reason `"browser"`). Ignored in `"tab"` mode. |
 | `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |

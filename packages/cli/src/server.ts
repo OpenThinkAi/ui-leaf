@@ -754,6 +754,14 @@ export interface DevServerOptions {
    * Opt-in remote-debugging port for shell:"app" (`--remote-debugging-port`,
    * bound to 127.0.0.1) so a host process can attach over the Chrome DevTools
    * Protocol. Integer 1–65535. Ignored in tab mode. Default: no port.
+   *
+   * SECURITY: the CDP endpoint has no authentication, and loopback-only is
+   * not a security boundary. Any local process, under any user account, can
+   * connect and take full DevTools control of this Chrome: run JavaScript in
+   * any page, read cookies and storage, and read the ui-leaf page URL with
+   * its `#token=` fragment (via `/json`). Do not combine `debugPort` with a
+   * persistent `profile` that holds sensitive logged-in sessions, and do not
+   * use it on shared or multi-user machines.
    */
   debugPort?: number;
   /**
