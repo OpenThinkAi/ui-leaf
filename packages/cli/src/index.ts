@@ -22,14 +22,11 @@ export interface MountOptions {
   /**
    * JSON-serializable data passed to the view as a prop.
    *
-   * Privacy note: the data is compiled into the HTML served at the mount URL
-   * and held in memory for the mount lifetime. Any same-UID local process
-   * that can reach `127.0.0.1:<port>` can fetch `GET /` and read it — the
-   * per-launch token guards `/mutate` against drive-by cross-origin requests
-   * in the browser, not against other processes on the machine. For PHI, PCI,
-   * financial records, or anything where a same-UID local reader is in your
-   * threat model, use `dataLoader` instead — the loader's return value is
-   * served at a token-gated `/api/data` endpoint and never appears in the HTML.
+   * Privacy: the data is never inlined into the HTML served at the mount URL
+   * (AGT-2350). The page fetches it from the token-gated `GET /api/data` and
+   * receives updates over the token-gated `/events` stream, so a local
+   * process that fetches `GET /` without the token cannot read it. It is
+   * held in memory for the mount lifetime and never written to disk.
    */
   data?: unknown;
   /**
@@ -40,8 +37,9 @@ export interface MountOptions {
    * view fetches it on first render before calling `createRoot().render()`.
    * The data never appears in the compiled HTML.
    *
-   * Use this instead of `data` for PHI, PCI, financial records, or anything
-   * else where in-HTML data exposure is in your threat model.
+   * Delivery is the same as for `data` (which is also served only from
+   * `/api/data` since AGT-2350); the difference is that the value is produced
+   * lazily by the loader rather than passed in.
    *
    * Error semantics: if the loader rejects, the rejection propagates to the
    * `mount()` caller (no automatic retry). Errors surface at mount time,
@@ -142,6 +140,14 @@ export interface MountOptions {
    * is loopback-only. If the port is already in use, Chrome still launches but
    * may fail to bind the debug endpoint (no ui-leaf-level error) — pick a free
    * port. Ignored in `shell: "tab"` mode. Default: no port.
+   *
+   * SECURITY: the CDP endpoint has no authentication, and loopback-only is
+   * not a security boundary. Any local process, under any user account, can
+   * connect and take full DevTools control of this Chrome: run JavaScript in
+   * any page, read cookies and storage, and read the ui-leaf page URL with
+   * its `#token=` fragment (via `/json`). Do not combine `debugPort` with a
+   * persistent `profile` that holds sensitive logged-in sessions, and do not
+   * use it on shared or multi-user machines.
    */
   debugPort?: number;
   /**

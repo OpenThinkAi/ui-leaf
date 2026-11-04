@@ -112,10 +112,10 @@ export type InboundMutateResponse = InboundMutateResult | InboundMutateError;
 // New inbound message types (v1.0.0): live-update handlers.
 
 /**
- * Replace in-memory data. The served page HTML is re-assembled with the new
- * data and a data-updated SSE event is broadcast, so both a tab that is
- * already connected and one that loads (or reloads / reopens) later render
- * the latest data. If sent before `ready`, the message is buffered — last
+ * Replace in-memory data and broadcast a data-updated SSE event, so a tab
+ * that is already connected re-renders. The served HTML never carries data
+ * (AGT-2350); a tab that loads (or reloads / reopens) later fetches the
+ * latest data from the token-gated GET /api/data. If sent before `ready`, the message is buffered — last
  * write wins, since update is whole-data replacement — and applied to the
  * mount just before `ready` is emitted (issue #72).
  */

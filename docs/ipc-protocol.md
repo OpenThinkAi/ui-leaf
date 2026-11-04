@@ -70,7 +70,7 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `version` | `"1"` (const) | ✓ | Protocol version literal. A new $id hosts future breaking versions. | — |
 | `view` | string | ✓ | View name (resolved relative to viewsRoot) or inline TSX source string. | — |
 | `viewsRoot` | string | ✓ | Absolute path to the directory containing named view files. | — |
-| `data` | any |  | Initial data object passed to the view component as props (any JSON value). | — |
+| `data` | any |  | Initial data object passed to the view component as props (any JSON value). Never inlined into the served HTML: the page fetches it from the token-gated GET /api/data. | — |
 | `mutations` | array |  | Names of mutation handlers the view is allowed to call. | — |
 | `title` | string |  | Browser tab title. | — |
 | `port` | integer |  | TCP port to bind. 0 = OS-assigned. | min: 0, max: 65535 |
@@ -79,7 +79,7 @@ First line of stdin: config object that spawns a mount. No type discriminator; i
 | `profile` | object |  | Opt-in persistent browser profile for shell:"app". Without it each mount uses a throwaway temp profile discarded on unmount, so login-gated views re-authenticate every launch. Ignored in tab mode. | — |
 | `windowPosition` | object |  | Initial Chrome window position for shell:"app" (--window-position=x,y). Pairs with windowSize. Ignored in tab mode. | — |
 | `extensions` | array |  | Absolute paths to unpacked Chrome extension dirs to load for shell:"app" (--load-extension + --disable-extensions-except). Each entry is exactly one dir — commas are forbidden (Chrome treats the flag value as a comma-separated list, so an embedded comma would inject extra dirs). Dirs that don't exist are skipped with a stderr warning. Ignored in tab mode. Note: Chrome 149+ disabled --load-extension from the command line; use debugPort (CDP) to augment pages on current Chrome. | — |
-| `debugPort` | integer |  | Opt-in remote-debugging port for shell:"app" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode. | min: 1, max: 65535 |
+| `debugPort` | integer |  | Opt-in remote-debugging port for shell:"app" (--remote-debugging-port=<n>, bound to 127.0.0.1) so a host process can attach over the Chrome DevTools Protocol (CDP). If the port is already in use, Chrome still launches but may fail to bind the endpoint — pick a free port. Ignored in tab mode. SECURITY: the CDP endpoint has no authentication. Loopback-only binding is not a security boundary: any local process, under any user account, can connect and get full DevTools control of this Chrome. That includes running JavaScript in any page, reading cookies and storage, and reading the ui-leaf page URL with its #token= fragment (via /json), which unlocks /api/data and /mutate. Do not combine debugPort with a persistent profile that holds sensitive logged-in sessions, and do not use it on shared or multi-user machines. | min: 1, max: 65535 |
 | `csp` | string |  | Content Security Policy preset name or raw policy string. | — |
 | `heartbeatTimeoutMs` | integer |  | Milliseconds of browser silence before the mount emits disconnected (the mount stays alive). Default: 15000 (3x the page's 5s heartbeat). | min: 0 |
 | `startupGraceMs` | integer |  | Milliseconds to wait for a first browser connection before emitting disconnected. | min: 0 |
@@ -146,7 +146,7 @@ Caller's response to a mutate request: error path. Correlated by id.
 
 ### `update`
 
-Replace in-memory data. The served page HTML is re-assembled with the new data (no recompile) and a data-updated SSE event is broadcast to connected browser tabs, so already-connected tabs re-render and later loads (reload, reopen) first-paint the latest data. Sent before `ready`, the message is buffered — last write wins — and applied to the mount just before `ready` is emitted.
+Replace in-memory data and broadcast a data-updated SSE event over the token-gated /events stream, so already-connected tabs re-render. The served page HTML is unchanged and never carries data; later loads (reload, reopen) fetch the latest data from the token-gated GET /api/data before first paint. Sent before `ready`, the message is buffered — last write wins — and applied to the mount just before `ready` is emitted.
 
 **Example**
 
@@ -166,7 +166,7 @@ Replace in-memory data. The served page HTML is re-assembled with the new data (
 |---|---|:---:|---|---|
 | `version` | `"1"` (const) | ✓ | Protocol version literal. A new $id hosts future breaking versions. | — |
 | `type` | `"update"` (const) | ✓ | Discriminant: data update. | — |
-| `data` | any | ✓ | New data object to pass to the view component as props (any JSON value, including null). | — |
+| `data` | any | ✓ | New data object to pass to the view component as props (any JSON value, including null). Pushed to the page over the token-gated /events stream; the served HTML is unchanged. | — |
 
 
 ### `view`

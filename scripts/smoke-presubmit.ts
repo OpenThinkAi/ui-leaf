@@ -16,9 +16,10 @@
 //      into a tempdir via `scripts/build-binaries.ts --targets <host> --out <tmp>`.
 //   3. Drive the binary stdin-IPC round-trip directly against the built
 //      binary (mirrors smoke.yml's `binary` job driver): mount with an
-//      update written BEFORE `ready` (must be buffered and reflected in the
-//      first served paint — issue #72), then a post-ready update (the served
-//      HTML must re-assemble so reloads/reopens get fresh data), then close.
+//      update written BEFORE `ready` (must be buffered and served by the
+//      token-gated /api/data at first paint — issue #72), then a post-ready
+//      update (/api/data must track it so reloads/reopens get fresh data),
+//      then close. The served HTML must never carry the data (AGT-2350).
 //   4. Drive the wrapper round-trip by importing `packages/wrapper-js/src/`
 //      TypeScript directly (bun runs TS) and calling `mount({ binaryPath: ... })`
 //      with the just-built binary. No npm install. No GH Releases.
@@ -195,18 +196,35 @@ async function writeSmokeView(viewsRoot: string): Promise<void> {
 // -----------------------------------------------------------------------------
 
 async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promise<void> {
-  console.log("[binary] driving stdin-IPC mount → pre-ready update → served-HTML asserts → update → close");
+  console.log("[binary] driving stdin-IPC mount → pre-ready update → /api/data + data-free HTML asserts → update → close");
   await new Promise<void>((resolveDone, rejectDone) => {
+    // UI_LEAF_NO_OPEN=1 + openBrowser: true makes the binary print the
+    // tokened launch URL to stderr instead of opening a browser; the token
+    // is needed to read the token-gated /api/data.
     const child = spawn(binaryPath, ["mount"], {
-      stdio: ["pipe", "pipe", "inherit"],
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, UI_LEAF_NO_OPEN: "1" },
     });
+    let stderrBuf = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBuf += chunk.toString();
+      process.stderr.write(chunk);
+    });
+    const waitForToken = async (): Promise<string> => {
+      for (let i = 0; i < 50; i++) {
+        const m = /#token=([0-9a-f]+)/.exec(stderrBuf);
+        if (m?.[1]) return m[1];
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error("binary round-trip: tokened URL never printed to stderr (UI_LEAF_NO_OPEN)");
+    };
 
     const config = JSON.stringify({
       version: "1",
       view: "smoke",
       viewsRoot,
       data: { title: "smoke-ok" },
-      openBrowser: false,
+      openBrowser: true,
       heartbeatTimeoutMs: 5000,
     });
 
@@ -229,22 +247,43 @@ async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promis
       rejectDone(err);
     };
 
-    // On ready: assert the served page first-paints with the PRE-ready
-    // update's data (issue #72 — the update written right after the config,
-    // long before ready, must be buffered and applied, not dropped), then
-    // send a post-ready update and assert the served page tracks it (the
-    // HTML re-assembles on update; a reopen()'d tab would get this page).
+    // On ready: assert the page first-paints with the PRE-ready update's
+    // data (issue #72 — the update written right after the config, long
+    // before ready, must be buffered and applied, not dropped), then send a
+    // post-ready update and assert it is tracked. Data is read from the
+    // token-gated /api/data, which is what the page bootstraps from; the
+    // served HTML must never contain any of it (AGT-2350).
     const assertServedPages = async (port: number): Promise<void> => {
       const base = `http://127.0.0.1:${port}`;
+      const token = await waitForToken();
+      const apiData = async (): Promise<string> => {
+        const res = await fetch(`${base}/api/data`, { headers: { "X-UI-Leaf-Token": token } });
+        if (res.status !== 200) throw new Error(`binary round-trip: /api/data returned ${res.status}`);
+        return res.text();
+      };
+      const assertHtmlDataFree = async (when: string): Promise<void> => {
+        const html = await (await fetch(`${base}/`)).text();
+        for (const s of ["smoke-ok", "pre-ready-payload", "mutated"]) {
+          if (html.includes(s)) {
+            throw new Error(`binary round-trip: served HTML contains data ('${s}') ${when} (AGT-2350 regression)`);
+          }
+        }
+      };
 
-      const first = await (await fetch(`${base}/`)).text();
+      const unauth = await fetch(`${base}/api/data`);
+      if (unauth.status !== 401) {
+        throw new Error(`binary round-trip: /api/data without the token returned ${unauth.status}, expected 401`);
+      }
+
+      await assertHtmlDataFree("after a pre-ready update");
+      const first = await apiData();
       if (!first.includes("pre-ready-payload")) {
-        throw new Error("binary round-trip: served HTML does not reflect the pre-ready update (issue #72 regression — update sent before 'ready' was dropped or not applied)");
+        throw new Error("binary round-trip: /api/data does not reflect the pre-ready update (issue #72 regression — update sent before 'ready' was dropped or not applied)");
       }
       if (first.includes("smoke-ok")) {
-        throw new Error("binary round-trip: served HTML still embeds the config-time data despite a pre-ready update");
+        throw new Error("binary round-trip: /api/data still serves the config-time data despite a pre-ready update");
       }
-      console.log("[binary] pre-ready update reflected in first served paint");
+      console.log("[binary] pre-ready update served by /api/data; HTML data-free");
 
       child.stdin.write(
         JSON.stringify({ version: "1", type: "update", data: { title: "mutated" } }) + "\n",
@@ -252,11 +291,12 @@ async function runBinaryRoundtrip(binaryPath: string, viewsRoot: string): Promis
       // Give the single-threaded event loop a beat to process the line.
       await new Promise((r) => setTimeout(r, 500));
 
-      const second = await (await fetch(`${base}/`)).text();
+      await assertHtmlDataFree("after a post-ready update");
+      const second = await apiData();
       if (!second.includes("mutated") || second.includes("pre-ready-payload")) {
-        throw new Error("binary round-trip: served HTML not re-assembled after post-ready update (stale data would be served to reloads/reopens)");
+        throw new Error("binary round-trip: /api/data not updated after post-ready update (stale data would be served to reloads/reopens)");
       }
-      console.log("[binary] post-ready update reflected in served HTML");
+      console.log("[binary] post-ready update served by /api/data; HTML data-free");
       asserted = true;
     };
 

@@ -11,7 +11,6 @@ describe("compileView", () => {
       const result = await compileView({
         entry: "trivial",
         viewsRoot: VIEWS_ROOT,
-        data: { hello: "world" },
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("<!doctype html>");
@@ -28,7 +27,6 @@ describe("compileView", () => {
       const result = await compileView({
         entry: "with-jsx",
         viewsRoot: VIEWS_ROOT,
-        data: null,
       });
       expect(result.errors).toHaveLength(0);
       expect(result.html).toContain("<!doctype html>");
@@ -42,7 +40,6 @@ describe("compileView", () => {
       const result = await compileView({
         entry: "with-syntax-error",
         viewsRoot: VIEWS_ROOT,
-        data: null,
       });
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0]).toMatchObject({
@@ -61,7 +58,6 @@ describe("compileView", () => {
       const result = await compileView({
         entry: "with-bad-import",
         viewsRoot: VIEWS_ROOT,
-        data: null,
       });
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0]).toMatchObject({
@@ -75,7 +71,6 @@ describe("compileView", () => {
     const result = await compileView({
       entry: "trivial",
       viewsRoot: VIEWS_ROOT,
-      data: null,
       title: "<My & App>",
     });
     expect(result.errors).toHaveLength(0);
@@ -88,7 +83,6 @@ describe("compileView", () => {
     const result = await compileView({
       entry: "trivial",
       viewsRoot: VIEWS_ROOT,
-      data: null,
       csp,
     });
     expect(result.errors).toHaveLength(0);
@@ -96,14 +90,14 @@ describe("compileView", () => {
     expect(result.html).toContain("default-src 'self'");
   }, 30_000);
 
-  test("data is inlined as JSON.parse call in the output", async () => {
+  test("output carries no data and bootstraps from /api/data (AGT-2350)", async () => {
     const result = await compileView({
       entry: "trivial",
       viewsRoot: VIEWS_ROOT,
-      data: { secret: "value" },
     });
     expect(result.errors).toHaveLength(0);
-    expect(result.html).toContain("JSON.parse(");
-    expect(result.html).toContain("secret");
+    expect(result.html).toContain("window.__UI_LEAF__ = {};");
+    // The bundle bootstraps from the token-gated endpoint instead.
+    expect(result.html).toContain("/api/data");
   }, 30_000);
 });

@@ -1,13 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { mount } from "../packages/cli/src/index.ts";
-import * as vm from "node:vm";
+import { startDevServer } from "../packages/cli/src/server.ts";
 import { join } from "node:path";
 
 const VIEWS_ROOT = join(import.meta.dir, "fixtures");
 
 describe("data round-trip", () => {
   test(
-    "dates, nested objects, arrays, and unicode survive the inline-script path unchanged",
+    "dates, nested objects, arrays, and unicode survive the /api/data path unchanged",
     async () => {
       const data = {
         isoDate: "2024-01-15T10:30:00.000Z",
@@ -15,36 +14,29 @@ describe("data round-trip", () => {
         unicode: "日本\u{1F600}",
       };
 
-      const view = await mount({
+      let openedUrl = "";
+      const srv = await startDevServer({
+        _env: {},
         view: "minimal",
         viewsRoot: VIEWS_ROOT,
-        openBrowser: false,
-        silent: true,
-        port: 0,
         data,
+        port: 0,
+        openBrowser: true,
+        _opener: async (u: string) => { openedUrl = u; },
+        silent: true,
       });
 
       try {
-        const resp = await fetch(view.url);
-        const html = await resp.text();
-
-        const match = /<script>([^<]*window\.__UI_LEAF__[^<]*)<\/script>/.exec(html);
-        if (!match?.[1]) throw new Error("inline __UI_LEAF__ script not found in HTML");
-
-        const ctx = vm.createContext({
-          window: { location: { hash: "", pathname: "/", search: "" } },
-          history: { replaceState: () => {} },
+        const token = /#token=([0-9a-f]+)/.exec(openedUrl)?.[1];
+        if (!token) throw new Error(`no token in opened URL: ${openedUrl}`);
+        const resp = await fetch(srv.url + "/api/data", {
+          headers: { "X-UI-Leaf-Token": token },
         });
-        vm.runInContext(match[1], ctx);
-
-        // Serialize from the vm context to avoid cross-realm object comparison.
-        const resultJson = vm.runInContext(
-          "JSON.stringify(window.__UI_LEAF__.data)",
-          ctx,
-        ) as string;
-        expect(JSON.parse(resultJson)).toEqual(data);
+        expect(resp.status).toBe(200);
+        // The browser does exactly this: res.json() on the /api/data body.
+        expect(await resp.json()).toEqual(data);
       } finally {
-        await view.close();
+        await srv.close();
       }
     },
     60_000,

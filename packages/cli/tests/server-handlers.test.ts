@@ -40,6 +40,67 @@ async function startTestServer(opts?: {
   return server;
 }
 
+// Start a server whose tokened launch URL is captured via the opener seam,
+// so tests can call the token-gated endpoints.
+async function startTokenServer(data: unknown): Promise<{ srv: DevServer; token: string }> {
+  let openedUrl = "";
+  server = await startDevServer({
+    _env: {},
+    view: "trivial",
+    viewsRoot: VIEWS_ROOT,
+    data,
+    port: 0,
+    openBrowser: true,
+    _opener: async (u: string) => { openedUrl = u; },
+    heartbeatTimeoutMs: 75_000,
+    startupGraceMs: 0,
+    silent: true,
+  });
+  const token = /#token=([0-9a-f]+)/.exec(openedUrl)?.[1];
+  if (!token) throw new Error(`no token in opened URL: ${openedUrl}`);
+  return { srv: server, token };
+}
+
+async function apiData(srv: DevServer, token: string): Promise<unknown> {
+  const res = await fetch(srv.url + "/api/data", { headers: { "X-UI-Leaf-Token": token } });
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+describe("served HTML never carries mount data (AGT-2350)", () => {
+  test(
+    "GET / has no data payload after mount, update() and patch(); /api/data is token-gated",
+    async () => {
+      const { srv, token } = await startTokenServer({ mountSecret: "m-111" });
+
+      const atMount = await (await fetch(srv.url + "/")).text();
+      expect(atMount).not.toContain("mountSecret");
+      expect(atMount).not.toContain("m-111");
+      expect(atMount).toContain("window.__UI_LEAF__ = {};");
+
+      srv.update({ updateSecret: "u-222" });
+      const afterUpdate = await (await fetch(srv.url + "/")).text();
+      expect(afterUpdate).not.toContain("updateSecret");
+      expect(afterUpdate).not.toContain("u-222");
+      expect(afterUpdate).not.toContain("m-111");
+
+      const errors = await srv.patch({ patchSecret: "p-333" }, SIMPLE_VIEW);
+      expect(errors).toHaveLength(0);
+      const afterPatch = await (await fetch(srv.url + "/")).text();
+      expect(afterPatch).not.toContain("patchSecret");
+      expect(afterPatch).not.toContain("p-333");
+      expect(afterPatch).not.toContain("u-222");
+
+      // The data is only reachable with the token.
+      const noToken = await fetch(srv.url + "/api/data");
+      expect(noToken.status).toBe(401);
+      expect(await noToken.text()).not.toContain("p-333");
+      expect(await apiData(srv, token)).toEqual({ patchSecret: "p-333" });
+    },
+    60_000,
+  );
+});
+
 describe("update()", () => {
   test(
     "emits data-updated event on call",
@@ -57,66 +118,42 @@ describe("update()", () => {
   );
 
   test(
-    "re-assembles served HTML with the new data — a later load first-paints fresh (issue #72)",
+    "a later load gets fresh data from /api/data after update() (issue #72)",
     async () => {
-      const srv = await startTestServer({ data: { a: 1 } });
+      const { srv, token } = await startTokenServer({ a: 1 });
 
-      const before = await (await fetch(srv.url + "/")).text();
-      // The bootstrap double-JSON-stringifies data, so keys appear escaped.
-      expect(before).toContain('\\"a\\":1');
-
+      expect(await apiData(srv, token)).toEqual({ a: 1 });
       srv.update({ a: 2 });
-      const after = await (await fetch(srv.url + "/")).text();
-
-      // Same compiled bundle, fresh embedded data — no rebundle, but the
-      // page a new tab / reload / reopen() gets now carries the update.
-      expect(after).toContain('\\"a\\":2');
-      expect(after).not.toContain('\\"a\\":1');
+      // A new tab / reload / reopen() bootstraps from this endpoint.
+      expect(await apiData(srv, token)).toEqual({ a: 2 });
     },
     30_000,
   );
 
   test(
-    "reopen() after update() serves the updated data, not the mount-time snapshot",
+    "reopen() after update() first-paints the updated data, not the mount-time snapshot",
     async () => {
-      let openedUrl = "";
-      server = await startDevServer({
-        _env: {},
-        view: "trivial",
-        viewsRoot: VIEWS_ROOT,
-        data: { stale: true },
-        port: 0,
-        openBrowser: false,
-        heartbeatTimeoutMs: 75_000,
-        startupGraceMs: 0,
-        silent: true,
-        _opener: async (u: string) => { openedUrl = u; },
-      });
-      const srv = server;
-
-      srv.update({ fresh: true });
+      const { srv, token } = await startTokenServer({ staleSnapshot_q81: true });
+      srv.update({ freshSnapshot_q82: true });
       await srv.reopen();
-
-      // The reopened tab loads the same / handler — fetch what it would get.
-      const html = await (await fetch(new URL(openedUrl).origin + "/")).text();
-      expect(html).toContain('\\"fresh\\":true');
-      expect(html).not.toContain('\\"stale\\":true');
+      const html = await (await fetch(srv.url + "/")).text();
+      expect(html).not.toContain("staleSnapshot_q81");
+      expect(html).not.toContain("freshSnapshot_q82");
+      expect(await apiData(srv, token)).toEqual({ freshSnapshot_q82: true });
     },
     30_000,
   );
 
   test(
-    "update() after swapView() re-assembles against the swapped bundle",
+    "update() after swapView() serves the new data from /api/data",
     async () => {
-      const srv = await startTestServer({ data: { first: 1 } });
+      const { srv, token } = await startTokenServer({ first: 1 });
 
       const errors = await srv.swapView(SIMPLE_VIEW);
       expect(errors).toHaveLength(0);
 
       srv.update({ second: 2 });
-      const html = await (await fetch(srv.url + "/")).text();
-      expect(html).toContain('\\"second\\":2');
-      expect(html).not.toContain('\\"first\\":1');
+      expect(await apiData(srv, token)).toEqual({ second: 2 });
     },
     30_000,
   );
@@ -206,8 +243,8 @@ describe("patch()", () => {
       expect(events).toContain("view-swapped");
 
       const html = await (await fetch(srv.url + "/")).text();
-      // The bootstrap double-JSON-stringifies data, so "patched" appears with escaped quotes.
-      expect(html).toContain('\\"patched\\":true');
+      expect(html).toContain("<!doctype html>");
+      expect(html).not.toContain("patched");
     },
     30_000,
   );
