@@ -414,10 +414,54 @@ describe("persistent profile (ui-leaf#63)", () => {
 
       await srv.close();
       server = null;
+      // Even once its Chrome exits, a caller-owned profile is never removed.
+      childRef.current?.emit("exit", 0, null);
+      await new Promise((r) => setTimeout(r, 1_500));
 
       // The whole point of #63: the profile survives unmount so a re-launch
       // reuses the same logged-in session.
       expect(existsSync(profileDir)).toBe(true);
+    },
+    30_000,
+  );
+});
+
+describe("temp profile cleanup (AGT-2354)", () => {
+  test(
+    "removes the throwaway --user-data-dir after the spawned Chrome exits",
+    async () => {
+      let swept = 0;
+      server = await startDevServer({
+        _env: {},
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: true,
+        shell: "app",
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+        _spawn: fakeSpawn,
+        _fsAccess: fakeAccess,
+        _sweepStaleProfiles: async () => { swept++; },
+      });
+
+      await new Promise((r) => setImmediate(r));
+      // A shell:"app" mount kicks off the stale-profile sweep.
+      expect(swept).toBe(1);
+      const arg = spawnLog[0]!.args.find((a) => a.startsWith("--user-data-dir="))!;
+      const dir = arg.slice("--user-data-dir=".length);
+      expect(dir).toContain("ui-leaf-chrome-");
+      expect(existsSync(dir)).toBe(true);
+
+      childRef.current!.emit("exit", 0, null);
+      // Removal is delayed ~1s so lingering helpers finish writing.
+      const deadline = Date.now() + 5_000;
+      while (existsSync(dir) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(existsSync(dir)).toBe(false);
     },
     30_000,
   );

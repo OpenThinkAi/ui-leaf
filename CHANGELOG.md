@@ -7,6 +7,15 @@ changes that have landed on `main` but are not yet released.
 
 ### Security
 
+- **Responses are no longer cacheable, and temp Chrome profiles are cleaned
+  up (AGT-2354).** Every response from the mount server now carries
+  `Cache-Control: no-store, private`, so view HTML and `GET /api/data`
+  payloads stay out of the browser's HTTP cache. A `shell: "app"` mount's
+  throwaway `ui-leaf-chrome-*` profile in the temp dir is now removed about
+  a second after its Chrome exits, and each `shell: "app"` mount sweeps
+  leftover `ui-leaf-chrome-*` dirs older than a day that no running Chrome
+  holds (left behind when the host exited before Chrome). A persistent
+  `profile.dir` is never touched.
 - **`debugPort` risk documented (AGT-2351).** The README, `MountOptions`
   docs and the IPC schema now warn that the remote-debugging port has no
   authentication. Any local process gets full DevTools control: it can run
