@@ -193,27 +193,33 @@ export interface MountOptions {
   /**
    * Content-Security-Policy enforcement. Defaults to `"strict"`.
    *
-   * - `"strict"` — ui-leaf sends a balanced preset that browser-enforces
-   *   the broker principle: `connect-src 'self'` prevents views from
-   *   fetching external APIs (all data flows through `data` and
-   *   `mutations`); `form-action 'self'` closes the form-submit
-   *   exfiltration vector. Permitted: inline styles for React, plus any
-   *   HTTPS origin for `style-src` / `font-src` / `img-src` (so external
-   *   stylesheets like Google Fonts CSS load without configuration). If
-   *   you need to lock external stylesheet/font/image origins to a
-   *   specific allowlist, pass a raw CSP string instead. View files can
-   *   only *add* further restrictions via meta tag, never remove them.
+   * - `"strict"` — ui-leaf sends a preset that browser-enforces the broker
+   *   principle and allows no external origins: `connect-src 'self'`
+   *   prevents views from fetching external APIs (all data flows through
+   *   `data` and `mutations`); `form-action 'self'` closes the form-submit
+   *   exfiltration vector; images, fonts and stylesheets load only from the
+   *   ui-leaf server or inline `data:`/`blob:` URLs, so an external image
+   *   or stylesheet URL can't carry data out either; `frame-ancestors
+   *   'none'` blocks framing. Inline styles and scripts are permitted
+   *   (React needs them). View files can only *add* further restrictions
+   *   via meta tag, never remove them.
+   *
+   * - `"external-assets"` — the same lock on `connect-src` / `form-action`,
+   *   but images, fonts and stylesheets may load from any HTTPS origin
+   *   (Google Fonts, a CDN). This was the `"strict"` policy before
+   *   AGT-2354. A view can leak data through such a URL, so prefer
+   *   `"strict"`, or a raw CSP string naming the exact asset origins.
    *
    * - `"off"` — no CSP header sent. Views can fetch arbitrary URLs and
    *   submit forms to any origin. The data/mutations contract is
    *   honor-system only. Use this if you have a legitimate need for
    *   cross-origin access and accept the trade-off.
    *
-   * - `string` — raw CSP header value for full control. Use when the
-   *   "strict" preset doesn't fit (e.g. you need `connect-src` to
+   * - `string` — raw CSP header value for full control. Use when neither
+   *   preset fits (e.g. you need `connect-src` to
    *   include a Sentry endpoint).
    *
-   * Trade-off: when set to "strict" or a custom string, a view file
+   * Trade-off: when set to a preset or a custom string, a view file
    * cannot relax the policy at runtime. Switching back requires changing
    * the mount() call. That rigidity is a feature.
    */

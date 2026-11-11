@@ -364,7 +364,7 @@ the rejection's `cause` carries the binary's exit reason.
 | `extensions` | `string[]` | _none_ | Absolute paths to unpacked Chrome extension dirs to load into the `shell: "app"` window (`--load-extension` + `--disable-extensions-except`), e.g. a content-script overlay on a third-party page. Dirs that don't exist are skipped with a stderr warning. Ignored in `"tab"` mode. **Note:** Chrome 149+ disabled `--load-extension` from the command line — use `debugPort` (CDP) to augment pages on current Chrome. |
 | `debugPort` | `number` | _none_ | Opt-in remote-debugging port for `shell: "app"` (`--remote-debugging-port=<n>`, bound to `127.0.0.1`) so a host process can attach over the Chrome DevTools Protocol — e.g. inject an overlay onto a page you don't control via `Page.addScriptToEvaluateOnNewDocument` / `Runtime.evaluate`. Integer 1–65535; loopback-only. If the port is already in use, Chrome launches but may fail to bind the endpoint — pick a free port. Ignored in `"tab"` mode. **Security:** the port has no authentication, and loopback-only is not a boundary. Any local process, under any user account, gets full DevTools control: it can run JavaScript in the page, read cookies and storage, and read the ui-leaf token from the page URL. Don't combine it with a `profile` that holds sensitive logged-in sessions, and don't use it on shared machines. See [`debugPort` exposes the browser](#debugport-exposes-the-browser). |
 | `profile` | `{ dir: string }` | _none_ | Opt-in persistent browser profile for `shell: "app"`. `dir` is used as Chrome's `--user-data-dir` (created on first use, never deleted on unmount) so login-gated views keep their session across launches. Pass an absolute path; use a distinct `dir` per concurrent app-mode mount (a second launch on a busy `dir` hands off to the running Chrome and exits, which closes that mount with reason `"browser"`). Ignored in `"tab"` mode. |
-| `csp` | `"strict"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser (`connect-src 'self'`, `form-action 'self'`); `"off"` removes the header; a raw string takes full control. |
+| `csp` | `"strict"` \| `"external-assets"` \| `"off"` \| `string` | `"strict"` | Content-Security-Policy preset. `"strict"` enforces the broker principle in the browser and allows no external origins (`connect-src 'self'`, `form-action 'self'`, images/fonts/styles from the server or `data:` only, `frame-ancestors 'none'`); `"external-assets"` also allows HTTPS images, fonts and stylesheets; `"off"` removes the header; a raw string takes full control. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`/`Origin` headers beyond the built-in loopback set (`localhost`, `127.0.0.1`, `[::1]`). Use for `/etc/hosts` aliases; do **not** add public DNS names. |
 | `heartbeatTimeoutMs` | `number` | `15000` | Browser silence (ms) after which `disconnected` fires (3× the page's 5s heartbeat, so one late/clamped beat never flaps). Does **not** terminate the mount — only signals. Raise to `>= 65000` for windows kept hidden/minimized > 5 min (Chrome intensive timer throttling). |
 | `startupGraceMs` | `number` | `30000` | Grace period (ms) after server start before the heartbeat watcher arms. |
@@ -474,10 +474,12 @@ For a runnable counter example using the same wrapper API, see
   routes them to the caller process; the caller calls the backend; the result flows
   back.
 - `csp: "strict"` (the default) makes this structural at the browser level:
-  `connect-src 'self'` and `form-action 'self'` are set as HTTP response headers.
-  The browser refuses any `fetch()` call to a non-loopback origin. The view cannot
-  reach an external API even if you (or an AI assistant) accidentally write a `fetch`
-  call in the view code.
+  `connect-src 'self'` and `form-action 'self'` are set as HTTP response headers,
+  and images, fonts and stylesheets may load only from the ui-leaf server itself
+  (or inline `data:`/`blob:` URLs). The browser refuses any `fetch()` call to a
+  non-loopback origin and any external image, font or stylesheet URL, so the view
+  cannot reach an external API, or smuggle data out in an image URL, even if you
+  (or an AI assistant) accidentally write such code in the view.
 
 **Live data updates.** Push new data to a running mount without a reload:
 
@@ -487,6 +489,16 @@ For a runnable counter example using the same wrapper API, see
 
 The binary forwards it to the browser via a server-sent event; the view re-renders
 with in-page state preserved.
+
+**External images and fonts.** If the view loads images, fonts or stylesheets from
+external HTTPS origins (Google Fonts, a CDN), use the `external-assets` preset. It
+keeps `connect-src` and `form-action` locked to the server, but any HTTPS asset URL
+is allowed, and a view can send data out through one, so name exact origins in a raw
+string instead when you can:
+
+```json
+{"version": "1", "view": "report", "viewsRoot": "...", "data": {}, "csp": "external-assets"}
+```
 
 **CSP opt-out.** If the view legitimately needs external network access, add a `csp`
 key to the config object:
@@ -531,7 +543,7 @@ narrower posture — its README documents what's enforced in that release.
 |---|---|
 | Drive-by cross-origin requests from sites the user is browsing | DNS-rebind gate: `Host`/`Origin` header check |
 | Other local processes reading the auth token | Token delivered in URL fragment only — never in HTTP response body. Browser bootstrap clears it from the URL bar immediately. Subsequent requests carry it as `X-UI-Leaf-Token` header (covers `fetch`, `XHR`, WebSocket — `connect-src` in CSP terms — and form submissions via `form-action`). |
-| View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer. **Turning CSP off** (`csp: "off"`) re-opens the broker bypass: views can call any backend they want, defeating the broker principle. Use only when external network access is genuinely intended. |
+| View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer, and loads no external images, fonts or stylesheets (`external-assets` re-allows HTTPS assets). **Turning CSP off** (`csp: "off"`) re-opens the broker bypass: views can call any backend they want, defeating the broker principle. Use only when external network access is genuinely intended. |
 | View invoking undeclared mutations | Only mutation names declared in the config are routed; others return 404 from `/mutate` |
 
 ### What's out of scope

@@ -9,10 +9,11 @@ const STRICT_DIRECTIVES = [
   "default-src 'self'",
   "connect-src 'self'",
   "form-action 'self'",
-  "img-src 'self' data: https:",
-  "font-src 'self' https: data:",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline'",
+  "frame-ancestors 'none'",
 ];
 
 describe("CSP", () => {
@@ -120,7 +121,7 @@ describe("CSP", () => {
   );
 
   test(
-    "strict preset includes img-src with https: (HTTPS images load)",
+    "strict preset allows no external origins (AGT-2354)",
     async () => {
       const view = await mount({
         view: "minimal",
@@ -132,9 +133,46 @@ describe("CSP", () => {
       });
       try {
         const resp = await fetch(view.url);
-        const csp = resp.headers.get("content-security-policy");
-        expect(csp).toContain("img-src");
-        expect(csp).toContain("https:");
+        const csp = resp.headers.get("content-security-policy")!;
+        // No scheme or host source anywhere: images, fonts and styles can't
+        // be used to send data to an external URL.
+        expect(csp).not.toContain("https:");
+        expect(csp).not.toContain("http:");
+        expect(csp).not.toMatch(/\*/);
+        expect(csp).toContain("frame-ancestors 'none'");
+        // frame-ancestors is header-only; the <meta> copy drops it.
+        const html = await resp.text();
+        expect(html).toContain('http-equiv="Content-Security-Policy"');
+        expect(html).not.toContain("frame-ancestors");
+        expect(html).toContain("connect-src 'self'");
+      } finally {
+        await view.close();
+      }
+    },
+    30_000,
+  );
+
+  test(
+    "external-assets preset allows HTTPS images, fonts and stylesheets but keeps connect-src locked",
+    async () => {
+      const view = await mount({
+        view: "minimal",
+        viewsRoot: VIEWS_ROOT,
+        openBrowser: false,
+        silent: true,
+        port: 0,
+        csp: "external-assets",
+      });
+      try {
+        const resp = await fetch(view.url);
+        await resp.body?.cancel().catch(() => {});
+        const csp = resp.headers.get("content-security-policy")!;
+        expect(csp).toContain("img-src 'self' data: blob: https:");
+        expect(csp).toContain("font-src 'self' https: data:");
+        expect(csp).toContain("style-src 'self' 'unsafe-inline' https:");
+        expect(csp).toContain("connect-src 'self'");
+        expect(csp).toContain("form-action 'self'");
+        expect(csp).toContain("frame-ancestors 'none'");
       } finally {
         await view.close();
       }

@@ -391,7 +391,7 @@ describe("mutation responses still work after adding new handlers", () => {
   );
 });
 
-describe("strict CSP preset", () => {
+describe("external-assets CSP preset", () => {
   test(
     "style-src includes 'https:' to permit external stylesheet links (Google Fonts CSS, etc.)",
     async () => {
@@ -405,7 +405,7 @@ describe("strict CSP preset", () => {
         heartbeatTimeoutMs: 75_000,
         startupGraceMs: 0,
         silent: true,
-        csp: "strict",
+        csp: "external-assets",
       });
 
       const res = await fetch(server.url + "/");
@@ -416,6 +416,30 @@ describe("strict CSP preset", () => {
       // font-src and img-src already permit https:. The asymmetry was
       // unintentional (see ui-leaf#36).
       expect(csp).toContain("style-src 'self' 'unsafe-inline' https:");
+    },
+    30_000,
+  );
+
+  test(
+    "the default strict preset allows no https: asset origins (AGT-2354)",
+    async () => {
+      server = await startDevServer({
+        _env: {},
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+      });
+
+      const res = await fetch(server.url + "/");
+      await res.body?.cancel().catch(() => {});
+      const csp = res.headers.get("Content-Security-Policy")!;
+      expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+      expect(csp).not.toContain("https:");
     },
     30_000,
   );

@@ -44,10 +44,10 @@ export type MutationHandler<TArgs = unknown, TResult = unknown> = (
   args: TArgs,
 ) => TResult | Promise<TResult>;
 
-// `(string & {})` preserves the "off" / "strict" autocomplete suggestions
+// `(string & {})` preserves the "off" / "strict" / "external-assets" autocomplete suggestions
 // while still allowing arbitrary CSP strings. Plain string would collapse
 // the union and lose IntelliSense for the literals.
-export type CspOption = "off" | "strict" | (string & {});
+export type CspOption = "off" | "strict" | "external-assets" | (string & {});
 
 export type Shell = "tab" | "app";
 
@@ -716,25 +716,61 @@ function killChromeTree(
 }
 
 /**
- * Strict preset: locks `connect-src` to same-origin (the architectural
- * lock that forces views to route mutations through the CLI), while
- * permitting common needs (HTTPS images/fonts, inline styles for React).
- * A future v1.x mode could tighten script-src once usage patterns are known.
+ * Strict preset (the default): no external origins at all. `connect-src`
+ * and `form-action` are locked to same-origin (the architectural lock that
+ * forces views to route mutations through the CLI), and images, fonts and
+ * styles load only from the server itself or inline `data:`/`blob:` URLs,
+ * so view code can't leak data through an external image or stylesheet URL
+ * either. Inline styles and scripts stay allowed (React and the bootstrap
+ * need them). `frame-ancestors 'none'` stops other pages framing the view.
  */
 const STRICT_CSP = [
   "default-src 'self'",
   "connect-src 'self'",
   "form-action 'self'",
-  "img-src 'self' data: https:",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/**
+ * "external-assets" preset: the pre-AGT-2354 strict policy, for views that
+ * load images, fonts or stylesheets from external HTTPS origins (Google
+ * Fonts, a CDN). `connect-src`/`form-action` stay same-origin, but any HTTPS
+ * image/font/stylesheet URL is allowed, and such a URL can carry data out.
+ */
+const EXTERNAL_ASSETS_CSP = [
+  "default-src 'self'",
+  "connect-src 'self'",
+  "form-action 'self'",
+  "img-src 'self' data: blob: https:",
   "font-src 'self' https: data:",
   "style-src 'self' 'unsafe-inline' https:",
   "script-src 'self' 'unsafe-inline'",
+  "frame-ancestors 'none'",
 ].join("; ");
 
 function resolveCsp(opt: CspOption | undefined): string | null {
   if (!opt || opt === "off") return null;
   if (opt === "strict") return STRICT_CSP;
+  if (opt === "external-assets") return EXTERNAL_ASSETS_CSP;
   return opt;
+}
+
+/**
+ * The policy for the HTML <meta> copy. `frame-ancestors` is only honoured
+ * as an HTTP header (browsers ignore it in a meta tag and log a console
+ * error), so it is dropped from the meta copy; the header keeps it.
+ */
+function metaCsp(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const kept = header
+    .split(";")
+    .map((d) => d.trim())
+    .filter((d) => d !== "" && !/^frame-ancestors(\s|$)/i.test(d));
+  return kept.length > 0 ? kept.join("; ") : undefined;
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -1121,7 +1157,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       entry: view,
       viewsRoot,
       title,
-      csp: cspHeader ?? undefined,
+      csp: metaCsp(cspHeader),
     });
 
     if (result.errors.length > 0) {
@@ -1535,7 +1571,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         const r = await compileSource({
           source,
           title,
-          csp: cspHeader ?? undefined,
+          csp: metaCsp(cspHeader),
         });
         if (r.errors.length > 0) return r.errors;
         viewState.html = r.html;
@@ -1548,7 +1584,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         const r = await compileSource({
           source,
           title,
-          csp: cspHeader ?? undefined,
+          csp: metaCsp(cspHeader),
         });
         if (r.errors.length > 0) return r.errors;
         // Only mutate state on compile success (atomicity guarantee).
