@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readdir, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { delimiter, join } from "node:path";
@@ -233,10 +233,11 @@ function attachLauncherErrorListener(
  * Set `UI_LEAF_DEBUG=1` (env var, opt-in) to emit a stderr breadcrumb
  * each time the silenced `'error'` fires.
  *
- * **Profile leak**: a successful launch leaves a fresh user-data-dir
- * under `os.tmpdir()` and intentionally does not clean it up — when
- * cleanup() kills the Chrome tree we can't safely remove a directory
- * Chrome may still be flushing to. The OS reaps tmpdir periodically.
+ * **Profile cleanup**: a successful launch creates a fresh user-data-dir
+ * under `os.tmpdir()`, removed shortly after the spawned Chrome exits (not
+ * at cleanup() time, when Chrome may still be flushing to it). If the host
+ * exits before Chrome does, the dir is left behind and the next mount's
+ * {@link sweepStaleChromeProfiles} removes it once it is clearly unused.
  * When this function returns null (no Chromium found), the just-created
  * temp dir is removed before returning so a caller-side fallback to a
  * default-browser tab doesn't leak an empty profile. A persistent
@@ -333,6 +334,78 @@ export function buildAppModeArgs(
   return args;
 }
 
+/** Delay between a temp-profile Chrome exiting and removing its profile dir. */
+const PROFILE_RM_DELAY_MS = 1_000;
+
+/** Prefix of the throwaway Chrome profile dirs created under os.tmpdir(). */
+export const TEMP_PROFILE_PREFIX = "ui-leaf-chrome-";
+
+/** Temp profiles older than this (by mtime) are eligible for the stale sweep. */
+export const STALE_PROFILE_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Remove leftover `ui-leaf-chrome-*` temp profiles that are clearly not in
+ * use: last modified more than `maxAgeMs` ago AND not locked by a live
+ * Chrome (POSIX: Chrome's `SingletonLock` symlink in the profile points at
+ * `<host>-<pid>`, and a dir whose lock names a running pid is kept;
+ * Windows: any dir with a `lockfile` is kept). Persistent
+ * caller-supplied profiles never match the prefix in tmpdir, so they are
+ * never touched. Best-effort: every failure is swallowed. Returns the paths
+ * removed (for tests).
+ */
+export async function sweepStaleChromeProfiles(
+  dir: string = tmpdir(),
+  now: number = Date.now(),
+  maxAgeMs: number = STALE_PROFILE_AGE_MS,
+): Promise<string[]> {
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!name.startsWith(TEMP_PROFILE_PREFIX)) continue;
+    const full = join(dir, name);
+    try {
+      const st = await lstat(full);
+      if (!st.isDirectory()) continue;
+      if (now - st.mtimeMs < maxAgeMs) continue;
+      if (await profileLockedByLiveProcess(full)) continue;
+      await rm(full, { recursive: true, force: true });
+      removed.push(full);
+    } catch {
+      // Best-effort: skip anything we can't stat or remove.
+    }
+  }
+  return removed;
+}
+
+async function profileLockedByLiveProcess(profileDir: string): Promise<boolean> {
+  // Windows Chrome marks a profile in use with a `lockfile` it holds open,
+  // and we can't cheaply tell a live one from a crash leftover: be
+  // conservative and keep any profile that has one.
+  if (process.platform === "win32") {
+    return pathExists(join(profileDir, "lockfile"), access);
+  }
+  let target: string;
+  try {
+    target = await readlink(join(profileDir, "SingletonLock"));
+  } catch {
+    return false; // no lock (or not a symlink, e.g. Windows): not in use
+  }
+  const pid = Number(target.slice(target.lastIndexOf("-") + 1));
+  if (!Number.isInteger(pid) || pid <= 0) return true; // unparseable: keep it
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the pid exists but belongs to someone else: keep it.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 async function openInAppMode(
   url: string,
   windowSize: { width: number; height: number } | undefined,
@@ -376,7 +449,7 @@ async function openInAppMode(
       return null;
     }
   } else {
-    userDataDir = await mkdtemp(join(tmpdir(), "ui-leaf-chrome-"));
+    userDataDir = await mkdtemp(join(tmpdir(), TEMP_PROFILE_PREFIX));
   }
 
   // Filter the requested extension dirs (ui-leaf#64). Two skip reasons:
@@ -483,6 +556,16 @@ async function openInAppMode(
       },
     );
     attachLauncherErrorListener(child, binPath);
+    // A throwaway profile is removed once its Chrome exits. Delayed briefly
+    // so helper processes that outlive the main pid by a moment have stopped
+    // writing; anything they recreate after that is caught by the stale
+    // sweep at the next mount (sweepStaleChromeProfiles).
+    if (!persistent) {
+      child.once("exit", () => {
+        const t = setTimeout(() => void cleanupProfile(), PROFILE_RM_DELAY_MS);
+        t.unref?.();
+      });
+    }
     // unref so a still-running Chrome doesn't keep the host's event loop
     // alive after the server closes. We retain the JS reference for the
     // cleanup-time kill (unref only affects event-loop accounting).
@@ -833,6 +916,13 @@ export interface DevServerOptions {
    */
   _listProcesses?: () => ProcessInfo[];
   /**
+   * Test seam: replace the stale temp-profile sweep that a `shell: "app"`
+   * mount starts in the background (defaults to
+   * {@link sweepStaleChromeProfiles} over `os.tmpdir()`).
+   * Never set this in production.
+   */
+  _sweepStaleProfiles?: () => Promise<unknown>;
+  /**
    * Test seam: timings for the shell:"app" window watcher (ui-leaf#101) and
    * the grace period between asking an empty Chrome to quit over CDP and
    * signalling it. Defaults: 1000ms poll, 3000ms empty grace, 15000ms launch
@@ -982,6 +1072,7 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
     _spawn: spawnImpl = spawn,
     _fsAccess: fsAccessImpl = access,
     _listProcesses: listProcessesImpl = defaultListProcesses,
+    _sweepStaleProfiles: sweepStaleProfilesImpl = sweepStaleChromeProfiles,
     _appWatch: appWatchOpts = {},
     _env = process.env as Record<string, string | undefined>,
   } = opts;
@@ -995,6 +1086,13 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
   // process.stdout.write to stderr to catch anything that bypasses our
   // own output path.
   const restoreStdout: (() => void) | null = silent ? redirectStdoutToStderr() : null;
+
+  // App-mode mounts create throwaway Chrome profiles in tmpdir. Clear out
+  // leftovers from earlier mounts whose host exited before Chrome did.
+  // Background and best-effort: never delays or fails the mount.
+  if (shell === "app") {
+    void sweepStaleProfilesImpl().catch(() => {});
+  }
 
   try {
     if (view.includes("/") || view.includes("\\")) {
@@ -1097,7 +1195,11 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
         );
       }
 
-      const headers: Record<string, string> = {};
+      // Every response carries view HTML or mount data, which can be
+      // sensitive: keep it out of the browser's HTTP cache and any proxy.
+      const headers: Record<string, string> = {
+        "Cache-Control": "no-store, private",
+      };
       if (cspHeader) {
         headers["Content-Security-Policy"] = cspHeader;
       }

@@ -101,6 +101,29 @@ describe("served HTML never carries mount data (AGT-2350)", () => {
   );
 });
 
+describe("response caching (AGT-2354)", () => {
+  test(
+    "GET / and GET /api/data are sent with Cache-Control: no-store, private",
+    async () => {
+      const { srv, token } = await startTokenServer({ secret: "c-1" });
+      const page = await fetch(srv.url + "/");
+      await page.body?.cancel().catch(() => {});
+      expect(page.headers.get("cache-control")).toBe("no-store, private");
+
+      const data = await fetch(srv.url + "/api/data", { headers: { "X-UI-Leaf-Token": token } });
+      await data.body?.cancel().catch(() => {});
+      expect(data.status).toBe(200);
+      expect(data.headers.get("cache-control")).toBe("no-store, private");
+
+      const denied = await fetch(srv.url + "/api/data");
+      await denied.body?.cancel().catch(() => {});
+      expect(denied.headers.get("cache-control")).toBe("no-store, private");
+      await srv.close();
+    },
+    30_000,
+  );
+});
+
 describe("update()", () => {
   test(
     "emits data-updated event on call",
