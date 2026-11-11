@@ -79,7 +79,13 @@ export type MountOptions = {
    * windows — use a distinct `dir` per concurrent app-mode mount.
    */
   profile?: { dir: string };
-  csp?: string;
+  /**
+   * Content-Security-Policy. `"strict"` (the default) allows no external
+   * origins; `"external-assets"` also allows HTTPS images, fonts and
+   * stylesheets; `"off"` sends no policy; any other string is used as a
+   * raw policy.
+   */
+  csp?: "strict" | "external-assets" | "off" | (string & {});
   heartbeatTimeoutMs?: number;
   startupGraceMs?: number;
   allowedHosts?: string[];

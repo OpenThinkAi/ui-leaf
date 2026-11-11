@@ -44,7 +44,7 @@ export type MutationHandler<TArgs = unknown, TResult = unknown> = (
   args: TArgs,
 ) => TResult | Promise<TResult>;
 
-// `(string & {})` preserves the "off" / "strict" autocomplete suggestions
+// `(string & {})` preserves the "off" / "strict" / "external-assets" autocomplete suggestions
 // while still allowing arbitrary CSP strings. Plain string would collapse
 // the union and lose IntelliSense for the literals.
 export type CspOption = "off" | "strict" | "external-assets" | (string & {});

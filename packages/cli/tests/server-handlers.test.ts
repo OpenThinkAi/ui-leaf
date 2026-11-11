@@ -419,4 +419,28 @@ describe("external-assets CSP preset", () => {
     },
     30_000,
   );
+
+  test(
+    "the default strict preset allows no https: asset origins (AGT-2354)",
+    async () => {
+      server = await startDevServer({
+        _env: {},
+        view: "trivial",
+        viewsRoot: VIEWS_ROOT,
+        data: {},
+        port: 0,
+        openBrowser: false,
+        heartbeatTimeoutMs: 75_000,
+        startupGraceMs: 0,
+        silent: true,
+      });
+
+      const res = await fetch(server.url + "/");
+      await res.body?.cancel().catch(() => {});
+      const csp = res.headers.get("Content-Security-Policy")!;
+      expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+      expect(csp).not.toContain("https:");
+    },
+    30_000,
+  );
 });
