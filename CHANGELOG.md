@@ -7,6 +7,17 @@ changes that have landed on `main` but are not yet released.
 
 ### Security
 
+- **`csp: "strict"` now allows no external origins (AGT-2354). Behaviour
+  change.** The strict preset (the default) used to allow images, fonts and
+  stylesheets from any `https:` origin, so view code could leak data through
+  an external image or stylesheet URL even though `connect-src` was locked.
+  Strict now loads images, fonts and styles only from the ui-leaf server or
+  inline `data:`/`blob:` URLs, and adds `frame-ancestors 'none'` (sent in the
+  header only; browsers ignore it in a meta tag). **If your view loads
+  external images, fonts or stylesheets (Google Fonts, a CDN), they are now
+  blocked under the default:** pass `csp: "external-assets"`, a new preset
+  with the previous strict behaviour (plus `blob:` images and
+  `frame-ancestors 'none'`), or a raw CSP string naming the exact origins.
 - **Responses are no longer cacheable, and temp Chrome profiles are cleaned
   up (AGT-2354).** Every response from the mount server now carries
   `Cache-Control: no-store, private`, so view HTML and `GET /api/data`

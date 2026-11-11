@@ -92,7 +92,7 @@
         },
         "csp": {
           "type": "string",
-          "description": "Content Security Policy preset name or raw policy string."
+          "description": "Content Security Policy: a preset name (\"strict\", the default: no external origins; \"external-assets\": also allows HTTPS images, fonts and stylesheets; \"off\": no policy) or a raw policy string."
         },
         "heartbeatTimeoutMs": {
           "type": "integer",

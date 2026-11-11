@@ -391,7 +391,7 @@ describe("mutation responses still work after adding new handlers", () => {
   );
 });
 
-describe("strict CSP preset", () => {
+describe("external-assets CSP preset", () => {
   test(
     "style-src includes 'https:' to permit external stylesheet links (Google Fonts CSS, etc.)",
     async () => {
@@ -405,7 +405,7 @@ describe("strict CSP preset", () => {
         heartbeatTimeoutMs: 75_000,
         startupGraceMs: 0,
         silent: true,
-        csp: "strict",
+        csp: "external-assets",
       });
 
       const res = await fetch(server.url + "/");
