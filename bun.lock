@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@openthink/ui-leaf",
+      "name": "@openthink/ui-leaf-root",
       "dependencies": {
         "open": "^11.0.0",
         "react": "^19.2.5",
@@ -18,7 +18,7 @@
       "name": "@openthink/ui-leaf-node-example",
       "version": "0.0.0",
       "dependencies": {
-        "@openthink/ui-leaf": "workspace:@openthink/ui-leaf-wrapper@*",
+        "@openthink/ui-leaf": "workspace:*",
       },
     },
     "packages/cli": {
