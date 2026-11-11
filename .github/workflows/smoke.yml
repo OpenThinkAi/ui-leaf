@@ -29,8 +29,35 @@ on:
 permissions:
   contents: read
 
+# Workflow inputs reach shell steps only through these env vars, always
+# quoted, never as an inputs expression interpolated into a script (that would
+# let a crafted input inject shell). validate-inputs rejects anything that
+# isn't a semver version / plain dist-tag before any other job runs.
+env:
+  SMOKE_VERSION: ${{ inputs.version }}
+  SMOKE_NPM_TAG: ${{ inputs.npm_tag }}
+
 jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check version and npm tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if ! [[ "$SMOKE_VERSION" =~ $semver ]]; then
+            echo "version is not a semver version (e.g. 1.0.0-rc.1)" >&2
+            exit 1
+          fi
+          if ! [[ "$SMOKE_NPM_TAG" =~ ^[A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "npm_tag must be a plain dist-tag (e.g. next or latest)" >&2
+            exit 1
+          fi
+
   binary:
+    needs: validate-inputs
     name: Binary — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -57,7 +84,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL \
-            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/checksums.txt" \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${SMOKE_VERSION}/checksums.txt" \
             -o checksums.txt
           cat checksums.txt
 
@@ -65,7 +92,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL \
-            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${{ inputs.version }}/${{ matrix.artifact }}" \
+            "https://github.com/OpenThinkAi/ui-leaf/releases/download/v${SMOKE_VERSION}/${{ matrix.artifact }}" \
             -o "${{ matrix.binary }}"
 
       - name: Verify SHA256
@@ -203,6 +230,7 @@ jobs:
           DRIVER
 
   wrapper:
+    needs: validate-inputs
     name: JS wrapper — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -222,7 +250,7 @@ jobs:
         shell: bash
         run: |
           mkdir smoke-wrapper && cd smoke-wrapper
-          npm install "@openthink/ui-leaf@${{ inputs.npm_tag }}"
+          npm install "@openthink/ui-leaf@${SMOKE_NPM_TAG}"
 
       - name: Verify binary was downloaded
         shell: bash
