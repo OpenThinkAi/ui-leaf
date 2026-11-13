@@ -4,8 +4,8 @@ Customizable browser views, on demand, for any CLI.
 
 `ui-leaf` is a self-contained binary. Any program that can spawn a subprocess and
 read/write line-delimited JSON on stdio can drive a browser view — Bash scripts,
-Python CLIs, Rust tools, Node programs, AI agents. A thin JS wrapper for ergonomic
-Node use ships with v1.0.0.
+Python CLIs, Rust tools, Node programs, AI agents. A thin JS wrapper
+(`@openthink/ui-leaf`) gives Node callers an ergonomic `mount()` API.
 
 The view is your code — a `.tsx` file in your project's `views/` directory. That's
 the **bring-your-own-view** part.
@@ -37,27 +37,20 @@ the roadmap; today, non-Node callers drive the binary directly over stdio (see
 
 ## Install
 
-### Binary on `$PATH` (v1.0.0, any language)
-
-> Available with the v1.0.0 release. Today's `@openthink/ui-leaf@0.8.x` is the
-> Node SDK — see the v0.8.x callout above.
+### Binary on `$PATH` (any language)
 
 ```bash
 npm install -g @openthink/ui-leaf
 # or: bun add -g @openthink/ui-leaf  /  pnpm add -g @openthink/ui-leaf
 ```
 
-With v1.0.0, the global install puts the `ui-leaf` binary on your `$PATH`. Use
+The global install puts the `ui-leaf` binary on your `$PATH`. Use
 for Bash, Python, Rust, Go, or any other language — the binary itself has no
 Node dependency at runtime (the install path goes through npm's postinstall).
 
-### Direct download (v1.0.0, no Node required)
+### Direct download (no Node required)
 
-> Available with the v1.0.0 release. The asset names below are the v1.0.0
-> release artifacts; today's `releases/latest` is v0.8.x and ships the SDK
-> tarball, not these binaries.
-
-Once v1.0.0 ships, grab the right binary from
+Grab the right binary from
 [GitHub Releases](https://github.com/OpenThinkAi/ui-leaf/releases/latest):
 
 | Platform | Asset |
@@ -542,6 +535,7 @@ narrower posture — its README documents what's enforced in that release.
 | Threat | Mechanism |
 |---|---|
 | Drive-by cross-origin requests from sites the user is browsing | DNS-rebind gate: `Host`/`Origin` header check |
+| Other local processes reading mount data | `GET /` (no token) serves only the view bundle. Data is fetched from the token-gated `GET /api/data` and pushed over the token-gated `/events` stream; page and data responses carry `Cache-Control: no-store, private`, so neither lands in the browser's HTTP cache. |
 | Other local processes reading the auth token | Token delivered in URL fragment only — never in HTTP response body. Browser bootstrap clears it from the URL bar immediately. Subsequent requests carry it as `X-UI-Leaf-Token` header (covers `fetch`, `XHR`, WebSocket — `connect-src` in CSP terms — and form submissions via `form-action`). |
 | View calling the consumer's backend directly | `csp: "strict"` default — browser refuses cross-origin `fetch`, XHR, WebSocket, and form submissions at CSP layer, and loads no external images, fonts or stylesheets (`external-assets` re-allows HTTPS assets). **Turning CSP off** (`csp: "off"`) re-opens the broker bypass: views can call any backend they want, defeating the broker principle. Use only when external network access is genuinely intended. |
 | View invoking undeclared mutations | Only mutation names declared in the config are routed; others return 404 from `/mutate` |

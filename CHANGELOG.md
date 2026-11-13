@@ -5,6 +5,12 @@ changes that have landed on `main` but are not yet released.
 
 ## Unreleased
 
+## 1.8.0 — 2026-11-12
+
+Minor bump: the new `csp: "external-assets"` preset adds public surface. The
+default `csp: "strict"` policy is tighter (behaviour change, see below). See
+`RELEASE_NOTES_v1.8.0.md`.
+
 ### Security
 
 - **`csp: "strict"` now allows no external origins (AGT-2354). Behaviour
@@ -56,6 +62,14 @@ changes that have landed on `main` but are not yet released.
   tarball and publishes it with a pinned npm. The release job no longer
   installs or builds anything while holding `contents: write`. npm publishes
   only after the GitHub Release has its binaries.
+
+### Docs
+
+- README install section no longer says the binaries and global install are
+  "available with the v1.0.0 release"; the security table lists the mount-data
+  protections. `ui-leaf mount --help` now shows a config example with the
+  required `"version":"1"` field and links to the existing
+  "Quickstart: non-JS callers" README section.
 
 ## 1.7.0 — 2026-10-11
 
