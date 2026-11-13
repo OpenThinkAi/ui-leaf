@@ -4,8 +4,8 @@ Customizable browser views, on demand, for any CLI.
 
 `ui-leaf` is a self-contained binary. Any program that can spawn a subprocess and
 read/write line-delimited JSON on stdio can drive a browser view — Bash scripts,
-Python CLIs, Rust tools, Node programs, AI agents. A thin JS wrapper for ergonomic
-Node use ships with v1.0.0.
+Python CLIs, Rust tools, Node programs, AI agents. A thin JS wrapper
+(`@openthink/ui-leaf`) gives Node callers an ergonomic `mount()` API.
 
 The view is your code — a `.tsx` file in your project's `views/` directory. That's
 the **bring-your-own-view** part.
