@@ -152,10 +152,10 @@ if (args[1] === "--help" || args[1] === "-h" || process.stdin.isTTY) {
       "  stdout {type:ready,url,port}, {type:mutate,id,name,args},",
       "         {type:closed}, {type:error,message}",
       "",
-      "Full spec: https://github.com/OpenThinkAi/ui-leaf#driving-ui-leaf-from-a-non-node-cli",
+      "Full spec: https://github.com/OpenThinkAi/ui-leaf#quickstart-non-js-callers",
       "",
       "Example:",
-      `  echo '{"view":"spec","viewsRoot":"/abs/path","data":{}}' | ui-leaf mount`,
+      `  echo '{"version":"1","view":"spec","viewsRoot":"/abs/path","data":{}}' | ui-leaf mount`,
       "",
     ].join("\n"),
   );
