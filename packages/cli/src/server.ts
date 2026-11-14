@@ -1216,6 +1216,17 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
       const host = req.headers.get("host") ?? undefined;
       const origin = req.headers.get("origin") ?? undefined;
 
+      // Every response carries view HTML or mount data, which can be
+      // sensitive: keep it out of the browser's HTTP cache and any proxy.
+      // Built before the DNS-rebinding gate so its 403 carries them too
+      // (#107).
+      const headers: Record<string, string> = {
+        "Cache-Control": "no-store, private",
+      };
+      if (cspHeader) {
+        headers["Content-Security-Policy"] = cspHeader;
+      }
+
       // DNS-rebinding gate: reject any request (including WebSocket upgrade
       // attempts) that does not arrive with an allowed Host. When Origin is
       // present, it must also be in the allowed set.
@@ -1227,17 +1238,8 @@ export async function startDevServer(opts: DevServerOptions): Promise<DevServer>
           : `Origin "${origin}"`;
         return new Response(
           `ui-leaf: refusing request with ${offender} — only the following hostnames are accepted to prevent DNS rebinding: ${allowedHostList}. Open the server at http://localhost:${actualPort}/ or http://127.0.0.1:${actualPort}/, or pass { allowedHosts: ["my-alias"] } to mount() to permit a custom alias.\n`,
-          { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+          { status: 403, headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" } },
         );
-      }
-
-      // Every response carries view HTML or mount data, which can be
-      // sensitive: keep it out of the browser's HTTP cache and any proxy.
-      const headers: Record<string, string> = {
-        "Cache-Control": "no-store, private",
-      };
-      if (cspHeader) {
-        headers["Content-Security-Policy"] = cspHeader;
       }
 
       const url = new URL(req.url);

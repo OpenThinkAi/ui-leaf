@@ -122,6 +122,26 @@ describe("response caching (AGT-2354)", () => {
     },
     30_000,
   );
+
+  test(
+    "the DNS-rebinding 403 is sent with Cache-Control: no-store, private (#107)",
+    async () => {
+      const srv = await startTestServer();
+
+      const badHost = await fetch(srv.url + "/", { headers: { Host: "evil.example.com" } });
+      await badHost.body?.cancel().catch(() => {});
+      expect(badHost.status).toBe(403);
+      expect(badHost.headers.get("cache-control")).toBe("no-store, private");
+
+      const badOrigin = await fetch(srv.url + "/", {
+        headers: { Origin: "http://evil.example.com" },
+      });
+      await badOrigin.body?.cancel().catch(() => {});
+      expect(badOrigin.status).toBe(403);
+      expect(badOrigin.headers.get("cache-control")).toBe("no-store, private");
+    },
+    30_000,
+  );
 });
 
 describe("update()", () => {

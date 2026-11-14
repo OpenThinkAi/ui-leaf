@@ -50,9 +50,13 @@ dev checkout the file is absent and `run-postinstall.cjs` skips the
 download. The npm publish job runs after the release job, so a version
 never reaches npm before its binaries are on the release.
 
-The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` +
-`publish.yml`; renaming the workflow file requires reconfiguring the
-binding at <https://www.npmjs.com/package/@openthink/ui-leaf/access>.
+The npm Trusted Publisher binding is `OpenThinkAi/ui-leaf` + workflow
+`publish.yml` + environment `npm-publish`. Only the `publish` job (the one
+holding `id-token: write`) declares `environment: npm-publish`; the GitHub
+environment accepts only `main`. Renaming the workflow file or the
+environment breaks publishing until the binding at
+<https://www.npmjs.com/package/@openthink/ui-leaf/access> is updated to
+match.
 
 ## Quality gates
 
