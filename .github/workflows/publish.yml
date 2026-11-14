@@ -44,7 +44,7 @@ name: Publish to npm
 # recovering from a Trusted Publisher misconfig without burning another
 # version bump. Every job is gated on "version not yet on npm", so once npm
 # has the version nothing re-runs. A rerun after a failed publish rebuilds
-# the binaries and replaces the release assets (allow_updates: true) along
+# the binaries and replaces the release assets (overwrite_files: true) along
 # with the checksums the new tarball pins, so they stay consistent.
 
 on:
@@ -198,7 +198,7 @@ jobs:
           generate_release_notes: true
           body_path: ${{ steps.notes.outputs.path }}
           fail_on_unmatched_files: true
-          allow_updates: true
+          overwrite_files: true
           files: |
             dist/ui-leaf-darwin-arm64
             dist/ui-leaf-darwin-x64
