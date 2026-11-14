@@ -7,9 +7,18 @@ name: Publish to npm
 #
 # Auth: Trusted Publishing via OIDC. No NPM_TOKEN secret; the npm package
 # must have a Trusted Publisher configured on the npm side pointing at
-# this repo + workflow filename (npm package → Settings → Trusted
-# Publishers). --provenance attaches an SLSA build attestation to the
-# published tarball, verifiable via `npm audit signatures`.
+# this repo + workflow filename `publish.yml` + the `npm-publish`
+# environment (https://www.npmjs.com/package/@openthink/ui-leaf/access).
+# Renaming this file or the environment breaks publishing until the npm
+# Trusted Publisher is updated to match. --provenance attaches an SLSA
+# build attestation to the published tarball, verifiable via
+# `npm audit signatures`.
+#
+# The `publish` job runs in the `npm-publish` GitHub Environment, which
+# only accepts the `main` branch; the npm Trusted Publisher is bound to
+# that environment, so an OIDC token minted by any other job or branch
+# cannot publish. The environment is a repository setting, not workflow
+# content.
 #
 # Job layout (least privilege per job; oaudit AGT-2352 / AGT-2354):
 #
@@ -25,7 +34,8 @@ name: Publish to npm
 #                                builds the wrapper, copies the binaries'
 #                                checksums.txt INTO the package, packs the
 #                                tarball and uploads it.
-#   publish   id-token: write  — downloads the tarball and publishes it. No
+#   publish   id-token: write  — runs in the `npm-publish` environment;
+#                                downloads the tarball and publishes it. No
 #                                checkout, no install, no lifecycle scripts:
 #                                nothing from the dependency tree runs while
 #                                ACTIONS_ID_TOKEN_REQUEST_* is in scope.
@@ -297,6 +307,12 @@ jobs:
     if: ${{ needs.plan.outputs.publishing == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Deployment environment. The OIDC token carries an
+    # `environment: npm-publish` claim, so the npm Trusted Publisher is
+    # bound to this environment, and the environment's deployment-branch
+    # rule (main only) gates every publish. Only this job uses it; renaming
+    # it breaks publishing until npm is updated.
+    environment: npm-publish
     # id-token: write is the only grant: OIDC for npm Trusted Publishing and
     # for --provenance. No contents permission — this job has no checkout.
     permissions:

@@ -5,6 +5,25 @@ changes that have landed on `main` but are not yet released.
 
 ## Unreleased
 
+### Security
+
+- **npm publishing is bound to the `npm-publish` environment.** The
+  publish workflow's `publish` job (the only one holding `id-token: write`)
+  now runs in the `npm-publish` GitHub Environment, which accepts only
+  `main`, so the npm Trusted Publisher can be bound to workflow
+  `publish.yml` plus that environment. Renaming either breaks publishing
+  until the npm side is updated.
+
+### Fixed
+
+- **The DNS-rebinding 403 now carries `Cache-Control: no-store, private`
+  (#107).** It was the one mount-server response without it, despite the
+  1.8.0 note that every response carries the header.
+- **Release step uses a real input (#106).** The publish workflow passed
+  `allow_updates` to `softprops/action-gh-release`, which has no such input.
+  It now sets `overwrite_files: true` (the action's default), so a rerun
+  still replaces existing release assets.
+
 ## 1.8.0 — 2026-11-12
 
 Minor bump: the new `csp: "external-assets"` preset adds public surface. The
