@@ -65,35 +65,73 @@ const schemaDiscriminant = (def: SchemaDef): string | null =>
 
 type TsObjectType = { members: Set<string>; discriminant: string | null };
 
-const sourceText = readFileSync(protocolPath, "utf8");
+const parseProtocolSource = (
+  raw: string,
+): {
+  objectTypes: Map<string, TsObjectType>;
+  unionMembers: Map<string, Set<string>>;
+} => {
+  // Normalise line endings first: the patterns below anchor on `\n`, and a
+  // Windows checkout (git's autocrlf) hands us CRLF, which made every pattern
+  // miss and the whole suite fail on windows-latest only.
+  const sourceText = raw.replace(/\r\n/g, "\n");
 
-const tsObjectTypes = new Map<string, TsObjectType>();
-const tsUnionMembers = new Map<string, Set<string>>();
+  const objectTypes = new Map<string, TsObjectType>();
+  const unionMembers = new Map<string, Set<string>>();
 
-// Object types: `export type Name = { ... };`
-for (const m of sourceText.matchAll(/export type (\w+) = \{\n([\s\S]*?)\n\};/g)) {
-  const [, name, body] = m;
-  const members = new Set<string>();
-  // top-level fields: exactly two leading spaces, then `name:` or `name?:`
-  for (const f of body.matchAll(/^ {2}(\w+)\??:/gm)) members.add(f[1]!);
-  // discriminant: the `type` field's string-literal value
-  const disc = body.match(/^ {2}type\??:\s*"([^"]+)"/m);
-  tsObjectTypes.set(name!, { members, discriminant: disc ? disc[1]! : null });
-}
+  // Object types: `export type Name = { ... };`
+  for (const m of sourceText.matchAll(/export type (\w+) = \{\n([\s\S]*?)\n\};/g)) {
+    const [, name, body] = m;
+    const members = new Set<string>();
+    // top-level fields: exactly two leading spaces, then `name:` or `name?:`
+    for (const f of body!.matchAll(/^ {2}(\w+)\??:/gm)) members.add(f[1]!);
+    // discriminant: the `type` field's string-literal value
+    const disc = body!.match(/^ {2}type\??:\s*"([^"]+)"/m);
+    objectTypes.set(name!, { members, discriminant: disc ? disc[1]! : null });
+  }
 
-// Union types: `export type Name =\n  | A\n  | B;`
-for (const m of sourceText.matchAll(/export type (\w+) =\s*\n((?:\s*\|\s*\w+\s*\n?)+);/g)) {
-  const [, name, arms] = m;
-  const refs = new Set<string>();
-  for (const a of arms!.matchAll(/\|\s*(\w+)/g)) refs.add(a[1]!);
-  tsUnionMembers.set(name!, refs);
-}
+  // Union types: `export type Name =\n  | A\n  | B;`
+  for (const m of sourceText.matchAll(/export type (\w+) =\s*\n((?:\s*\|\s*\w+\s*\n?)+);/g)) {
+    const [, name, arms] = m;
+    const refs = new Set<string>();
+    for (const a of arms!.matchAll(/\|\s*(\w+)/g)) refs.add(a[1]!);
+    unionMembers.set(name!, refs);
+  }
+
+  return { objectTypes, unionMembers };
+};
+
+const protocolSource = readFileSync(protocolPath, "utf8");
+const { objectTypes: tsObjectTypes, unionMembers: tsUnionMembers } =
+  parseProtocolSource(protocolSource);
 
 // Sanity: parsing actually found types (guards against a silent regex/AST miss
 // that would make every assertion below vacuously pass).
 test("parsed protocol.ts and ipc.json are non-empty", () => {
   expect(schemaStdioDefs.length).toBeGreaterThan(0);
   expect(tsObjectTypes.size).toBeGreaterThan(0);
+});
+
+// The parse must not depend on how git checked the file out. This runs on every
+// platform, so a line-ending regression fails locally and not only on Windows CI.
+test("parsing protocol.ts gives the same result with LF and CRLF line endings", () => {
+  const lf = protocolSource.replace(/\r\n/g, "\n");
+  const crlf = lf.replace(/\n/g, "\r\n");
+  expect(crlf).toContain("\r\n");
+
+  const fromLf = parseProtocolSource(lf);
+  const fromCrlf = parseProtocolSource(crlf);
+
+  expect([...fromCrlf.objectTypes.keys()]).toEqual([...fromLf.objectTypes.keys()]);
+  expect([...fromCrlf.unionMembers.keys()]).toEqual([...fromLf.unionMembers.keys()]);
+  for (const [name, type] of fromLf.objectTypes) {
+    const other = fromCrlf.objectTypes.get(name)!;
+    expect([...other.members]).toEqual([...type.members]);
+    expect(other.discriminant).toBe(type.discriminant);
+  }
+  for (const [name, refs] of fromLf.unionMembers) {
+    expect([...fromCrlf.unionMembers.get(name)!]).toEqual([...refs]);
+  }
 });
 
 // ── 1. every schema stdio def is mirrored in protocol.ts ─────────────────────
